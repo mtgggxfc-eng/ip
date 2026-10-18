@@ -185,6 +185,8 @@ def discover():
                 link = link_for_hy2(inbound, ip, 'Hysteria2-UDP')
                 result['udp'] = result['udp'] or link
                 if managed: result['managed_udp'] = link
+    if result['managed_home']:
+        result['home'] = result['managed_home']
     settings = pathlib.Path('/etc/residential-stack/settings.json')
     auth = pathlib.Path('/etc/residential-stack/auth.json')
     if settings.is_file() and auth.is_file():
