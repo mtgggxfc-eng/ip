@@ -26,6 +26,8 @@ curl -fsSL https://raw.githubusercontent.com/mtgggxfc-eng/ip/main/xiezai.sh | { 
 
 住宅出口来自 VPNGate 上游节点，是否能取得指定国家的可用住宅 IP 取决于上游供应；脚本会显示出口状态和失败日志。
 
+出口状态在面板更新完成后重新检测；没有代码或内部接口变化时，不重启正在运行的住宅代理。未连通时会显示程序日志及 OpenVPN 日志。公网节点端口和面板端口应放行**入站**；本机住宅出站检测不经过这些入站端口。若云平台出站默认全部允许，无需另开面板的出站端口；严格限制出站时，还需允许 DNS、HTTPS 和上游 OpenVPN 配置指定的 TCP/UDP 端口。
+
 本脚本独立使用 `residential-panel.service`、`residential-agent.service`、`three-nodes.service`、`/opt/residential-stack-agent` 和 `tun90`，不覆盖已有 sing-box 服务或旧住宅代理。若主机只有 x-ui 节点且没有可读的活动 sing-box 配置，脚本会补建独立节点。云平台的安全列表仍需放行新建的公网 TCP/UDP 端口；本机 UFW 若已启用，脚本会自动添加规则。
 
 住宅代理的节点选择逻辑改编自用户现有住宅面板部署，原项目见 [Free-Residential-IP-Proxy-Controller](https://github.com/a6216abcd/Free-Residential-IP-Proxy-Controller)。安装脚本和仓库不含面板账号、代理密码、Cloudflare Token 或 VPS 私钥；新部署的凭据在 VPS 上随机生成。
