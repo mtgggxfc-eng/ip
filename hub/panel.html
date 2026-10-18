@@ -1,0 +1,370 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>免费住宅IP智能调度系统 (单端口防误杀版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans p-4 md:p-6 min-h-screen flex flex-col">
+    <div class="max-w-[1440px] mx-auto w-full flex-grow relative">
+        <div class="absolute -top-24 -left-24 w-72 h-72 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none"></div>
+        <div class="absolute top-20 right-0 w-80 h-80 bg-blue-600/10 rounded-full blur-3xl pointer-events-none"></div>
+        <div class="relative flex flex-col lg:flex-row lg:justify-between lg:items-end gap-5 mb-7">
+            <div>
+                <div class="flex items-center gap-3 mb-3">
+                    <div class="w-3 h-3 rounded-full bg-emerald-400 shadow-[0_0_18px_rgba(52,211,153,.8)]"></div>
+                    <span class="text-xs tracking-[0.28em] uppercase text-cyan-300/80 font-semibold">Residential Edge Control</span>
+                </div>
+                <h1 class="text-3xl md:text-4xl font-black tracking-tight bg-gradient-to-r from-cyan-300 via-blue-400 to-violet-400 bg-clip-text text-transparent">住宅代理调度中心</h1>
+                <p class="text-slate-400 mt-2 text-sm md:text-base">单端口智能网络编排 · 节点健康监控 · 实时遥测同步</p>
+                <a href="/api/proxies" target="_blank" class="inline-flex items-center gap-2 mt-4 text-xs text-cyan-300 hover:text-cyan-200 transition">提取代理列表 <span class="font-mono bg-slate-900/80 border border-cyan-400/20 rounded px-2 py-1">__PANEL_URL__/api/proxies</span></a>
+            </div>
+
+            <div class="flex flex-col items-end gap-2">
+                <div class="glass-card p-4 rounded-2xl border border-white/10">
+                    <p class="text-[11px] tracking-widest uppercase text-slate-500 mb-2">Provision New VPS</p>
+                    <code class="text-emerald-300 text-xs md:text-sm select-all break-all">curl -fsSL https://raw.githubusercontent.com/mtgggxfc-eng/ip/main/jkyj.sh | bash</code>
+                </div>
+                <div class="glass-card p-3 px-4 rounded-2xl border border-white/10 w-full text-right text-xs text-slate-400">
+                    <div>面板凭证 <span class="text-cyan-300 font-bold font-mono">__PANEL_USER__</span> <span class="text-slate-600">/</span> <span class="text-cyan-300 font-bold font-mono">__PANEL_PASS__</span></div>
+                    <div class="mt-1">代理凭证 <span class="text-amber-300 font-bold font-mono">__SOCKS_USER__</span> <span class="text-slate-600">/</span> <span class="text-amber-300 font-bold font-mono">__SOCKS_PASS__</span></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-5 mb-5 relative">
+            <div class="lg:col-span-1 glass-card p-5 rounded-2xl border border-white/10 flex flex-col min-h-[280px] max-h-[360px]">
+                <div class="flex items-start justify-between mb-1">
+                    <div><p class="text-[11px] tracking-widest uppercase text-slate-500">Global Pool</p><h2 class="text-xl font-bold text-slate-100 mt-1">可用国家</h2></div>
+                    <span class="px-2 py-1 rounded-full text-[10px] bg-cyan-400/10 text-cyan-300 border border-cyan-400/20">LIVE</span>
+                </div>
+                <p class="text-xs text-slate-500 mb-4">节点池持续刷新，优质线路会优先进入调度队列。</p>
+                <div id="countries-list" class="flex flex-wrap gap-2 overflow-y-auto custom-scrollbar flex-grow content-start">
+                    <span class="text-slate-500 text-sm">正在拉取节点数据库...</span>
+                </div>
+            </div>
+            <div class="lg:col-span-3 glass-card p-5 rounded-2xl border border-white/10">
+                <div class="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-5">
+                    <div>
+                        <p class="text-[11px] tracking-widest uppercase text-slate-500">Policy Console</p>
+                        <h2 class="text-xl font-bold text-slate-100 mt-1">连接策略控制</h2>
+                        <p class="text-xs text-slate-500 mt-1">端口、模式和节点策略保存后将同步到本 VPS。</p>
+                    </div>
+                    <button onclick="saveConfig()" class="bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white px-6 py-3 rounded-xl text-sm font-bold shadow-lg shadow-cyan-900/30 transition transform hover:-translate-y-0.5">保存并全局下发</button>
+                </div>
+                <div class="flex flex-wrap gap-3" id="config-form">
+                    <span class="text-gray-500 text-sm">加载中...</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="glass-card rounded-2xl shadow-2xl shadow-black/20 overflow-hidden border border-white/10 mb-5">
+            <table class="w-full text-left border-collapse">
+                <thead>
+                    <tr class="bg-white/[0.04] text-slate-400 border-b border-white/10">
+                        <th class="py-3 px-4 font-semibold text-sm w-1/6">VPS 母机 IP</th>
+                        <th class="py-3 px-4 font-semibold text-sm">已就绪的特优代理 (国家 | 节点IP:端口)</th>
+                        <th class="py-3 px-4 font-semibold text-sm w-1/12">心跳状态</th>
+                        <th class="py-3 px-4 font-semibold text-sm text-right w-1/12">在线率</th>
+                    </tr>
+                </thead>
+                <tbody id="nodes-table" class="divide-y divide-gray-700">
+                    <tr><td colspan="4" class="py-8 text-center text-gray-500">正在与调度中心数据库通信...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="bg-[#050a12] border border-white/10 rounded-2xl shadow-2xl flex flex-col h-64 relative overflow-hidden">
+            <div class="bg-white/[0.04] border-b border-white/10 px-4 py-3 flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <div class="w-3 h-3 rounded-full bg-red-500"></div>
+                    <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+                    <div class="w-3 h-3 rounded-full bg-green-500"></div>
+                    <span class="text-xs text-slate-400 ml-2 font-mono">journalctl -u residential-agent.service</span>
+                </div>
+                <div class="text-[10px] text-green-400 font-mono animate-pulse">● 实时直播</div>
+            </div>
+             <div id="mock-terminal" class="hidden"></div>
+             <pre id="remote-log" class="hidden p-4 overflow-y-auto flex-grow bg-black/40 text-xs text-green-300 whitespace-pre-wrap custom-scrollbar"></pre>
+        </div>
+    </div>
+
+    <style>
+        body { background-image: radial-gradient(circle at 20% 0%, rgba(14, 165, 233, .08), transparent 32rem), linear-gradient(135deg, #020617 0%, #0b1120 55%, #111827 100%); }
+        .glass-card { background: linear-gradient(145deg, rgba(15, 23, 42, .88), rgba(15, 23, 42, .62)); box-shadow: 0 18px 60px rgba(0, 0, 0, .22), inset 0 1px rgba(255,255,255,.04); backdrop-filter: blur(16px); }
+        th { letter-spacing: .08em; text-transform: uppercase; font-size: 10px !important; }
+        td { border-color: rgba(255,255,255,.06) !important; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(15,23,42,.6); border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #155e75; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #22d3ee; }
+        @media (max-width: 640px) { body { padding: 12px; } table { min-width: 680px; } .glass-card { border-radius: 16px; } }
+    </style>
+
+    <script>
+        // === 伪同步日志系统 ===
+        const terminalLogs = [];
+        function pushLog(msg, type="INFO") {
+            const term = document.getElementById('mock-terminal');
+            if (!term) return;
+            const now = new Date();
+            const timeStr = now.getHours().toString().padStart(2, '0') + ':' +
+                            now.getMinutes().toString().padStart(2, '0') + ':' +
+                            now.getSeconds().toString().padStart(2, '0');
+
+            let color = 'text-gray-300';
+            if(type === 'WARN') color = 'text-yellow-400';
+            if(type === 'ERR') color = 'text-red-400';
+            if(type === 'SUCCESS') color = 'text-green-400';
+            if(type === 'SYS') color = 'text-blue-300';
+
+            terminalLogs.push(`<span class="text-gray-500">[${timeStr}]</span> <span class="${color}">[${type}] ${msg}</span>`);
+            if(terminalLogs.length > 50) terminalLogs.shift();
+
+            term.innerHTML = terminalLogs.join('<br>');
+            term.scrollTop = term.scrollHeight;
+        }
+
+        function renderRemoteLogs(servers) {
+            const log = servers.map(server => {
+                const text = String(server.log || '').trim();
+                return text ? `===== ${server.ip} =====\n${text}` : '';
+            }).filter(Boolean).join('\n');
+            const remoteLog = document.getElementById('remote-log');
+            if (log) {
+                remoteLog.textContent = log.slice(-24000);
+                remoteLog.classList.remove('hidden');
+            } else {
+                remoteLog.classList.add('hidden');
+            }
+        }
+
+        async function fetchCountries() {
+            try {
+                const res = await fetch('/api/countries');
+                const list = await res.json();
+                const container = document.getElementById('countries-list');
+                list.sort();
+                container.innerHTML = list.map(c => `<span class="bg-gray-700 px-2 py-1 rounded text-xs font-bold text-gray-300 border border-gray-600 cursor-pointer hover:bg-gray-600 transition" onclick="document.getElementById('slot-cfg-0').value='${c}'">${c}</span>`).join('');
+            } catch(e) {}
+        }
+
+        async function loadConfig() {
+            try {
+                const res = await fetch('/api/config');
+                const map_data = await res.json();
+                const map = map_data.slot_map || map_data;
+                const container = document.getElementById('config-form');
+
+                const port = Number(map_data.proxy_port) || 58123;
+                const val = map[0] || 'JP';
+                let html = `
+                    <div class="flex flex-wrap items-end gap-4 bg-gray-900 border border-gray-700 rounded p-4 relative group">
+                        <div class="flex flex-col gap-2 w-48">
+                            <label for="control-mode" class="text-[12px] text-gray-400 text-left">连接模式</label>
+                            <select id="control-mode" onchange="toggleManualMode()" class="bg-gray-800 border border-gray-600 rounded p-2 text-white font-bold focus:outline-none focus:border-blue-400 transition w-full">
+                                <option value="auto" ${map_data.mode === 'manual' ? '' : 'selected'}>自动连接</option>
+                                <option value="manual" ${map_data.mode === 'manual' ? 'selected' : ''}>手动选择</option>
+                            </select>
+                        </div>
+                        <div class="flex flex-col gap-2 min-w-56 flex-1">
+                            <label for="manual-node" class="text-[12px] text-gray-400 text-left">手动节点</label>
+                            <select id="manual-node" class="bg-gray-800 border border-gray-600 rounded p-2 text-white font-mono focus:outline-none focus:border-blue-400 transition w-full">
+                                <option value="${map_data.manual_node_ip || ''}">等待节点列表...</option>
+                            </select>
+                        </div>
+                        <div class="flex flex-col gap-2 w-48">
+                            <label for="proxy-port" class="text-[12px] text-gray-400 text-left">代理监听端口</label>
+                            <input type="number" id="proxy-port" value="${port}" min="1" max="65535" step="1" required class="bg-gray-800 border border-gray-600 rounded p-2 text-white text-center font-bold text-xl focus:outline-none focus:border-blue-400 transition w-full" />
+                        </div>
+                        <label class="flex items-center gap-3 px-3 py-2 rounded-xl bg-slate-800/70 border border-white/10 cursor-pointer select-none">
+                            <input type="checkbox" id="youtube-check" ${map_data.youtube_check ? 'checked' : ''} class="w-4 h-4 accent-cyan-400" />
+                            <span><strong class="block text-sm text-slate-200">YouTube 可用检测</strong><small class="text-[11px] text-slate-500">默认关闭，减少连接耗时</small></span>
+                        </label>
+                        <div class="flex flex-col gap-2 w-40">
+                            <label for="config-fetch-interval" class="text-[12px] text-gray-400 text-left">Agent 拉配置间隔（秒）</label>
+                            <input type="number" id="config-fetch-interval" value="${map_data.config_fetch_interval || 15}" min="5" max="3600" step="1" class="bg-gray-800 border border-gray-600 rounded p-2 text-white text-center font-bold focus:outline-none focus:border-blue-400 transition w-full" />
+                        </div>
+                        <div class="flex flex-col gap-2 w-40">
+                            <label for="heartbeat-interval" class="text-[12px] text-gray-400 text-left">Agent 心跳间隔（秒）</label>
+                            <input type="number" id="heartbeat-interval" value="${map_data.heartbeat_interval || 30}" min="10" max="3600" step="1" class="bg-gray-800 border border-gray-600 rounded p-2 text-white text-center font-bold focus:outline-none focus:border-blue-400 transition w-full" />
+                        </div>
+                        <div class="flex flex-col gap-2 w-40">
+                            <label for="frontend-poll-interval" class="text-[12px] text-gray-400 text-left">面板轮询间隔（秒）</label>
+                            <input type="number" id="frontend-poll-interval" value="${map_data.frontend_poll_interval || 5}" min="5" max="300" step="1" class="bg-gray-800 border border-gray-600 rounded p-2 text-white text-center font-bold focus:outline-none focus:border-blue-400 transition w-full" />
+                        </div>
+                        <div class="flex flex-col bg-gray-900 border-l border-gray-700 pl-4 text-center relative group w-48">
+                            <div class="flex justify-between items-center px-1 mb-2">
+                                <label class="text-[12px] text-gray-400">当前区域策略</label>
+                            <button onclick="forceSwitchIP(0, ${port})" title="嫌弃该IP？一键强制拉黑换新" class="text-gray-500 hover:text-red-400 transition">
+                                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.214-.722 5.002 5.002 0 009.777 1.665H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.277z" clip-rule="evenodd"></path>
+                                </svg>
+                            </button>
+                            </div>
+                            <input type="text" id="slot-cfg-0" value="${val}" class="bg-gray-800 border border-gray-600 rounded p-2 text-white text-center font-bold text-xl uppercase focus:outline-none focus:border-blue-400 transition w-full" />
+                        </div>
+                    </div>
+                `;
+
+                container.innerHTML = html;
+                toggleManualMode();
+                fetchNodes();
+            } catch(e) {}
+        }
+
+        function toggleManualMode() {
+            const mode = document.getElementById('control-mode');
+            const node = document.getElementById('manual-node');
+            if (!mode || !node) return;
+            node.disabled = mode.value !== 'manual';
+            node.classList.toggle('opacity-50', node.disabled);
+        }
+
+        function updateManualNodeOptions(servers) {
+            const select = document.getElementById('manual-node');
+            if (!select) return;
+            const selected = select.value;
+            const candidates = [];
+            (servers || []).forEach(server => {
+                (server.candidates || []).forEach(node => {
+                    if (!candidates.some(item => item.ip === node.ip)) candidates.push(node);
+                });
+            });
+            candidates.sort((a, b) => (a.ping || 9999) - (b.ping || 9999) || String(a.country || '').localeCompare(String(b.country || '')) || String(a.ip).localeCompare(String(b.ip)));
+            select.innerHTML = '<option value="">请选择可用节点</option>' + candidates.map(node =>
+                `<option value="${node.ip}">${node.country || '--'} | ${node.ip} | ${node.ping || '?'} ms</option>`
+            ).join('');
+            if (candidates.some(node => node.ip === selected)) select.value = selected;
+            toggleManualMode();
+        }
+
+        async function forceSwitchIP(slot, port) {
+            if(!confirm(`确认要强行断开并刷新【端口 ${port}】当前的节点 IP 吗？\n(该IP仅会进入 1 分钟临时冷却，不会被从池中删除。)`)) return;
+            try {
+                const res = await fetch('/api/switch', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json', 'X-Panel-Action': '1'},
+                    body: JSON.stringify({slot: slot})
+                });
+                if(res.ok) {
+                    pushLog(`[指令下达] 已向代理层发送端口 ${port} 的手动熔断强杀指令`, 'WARN');
+                    alert(`⚡ 指令下达成功！\nVPS 监控引擎已收到杀机指令。`);
+                } else {
+                    alert('网络指令下发失败，请重试');
+                }
+            } catch(e) {
+                alert('网络指令下发异常');
+            }
+        }
+
+        async function saveConfig() {
+            const port = Number.parseInt(document.getElementById('proxy-port').value, 10);
+            if (!Number.isInteger(port) || port < 1 || port > 65535) {
+                alert('代理端口必须是 1 到 65535 之间的整数');
+                return;
+            }
+            const map = {
+                0: document.getElementById(`slot-cfg-0`).value.toUpperCase().trim() || 'JP'
+            };
+            const mode = document.getElementById('control-mode').value;
+            const manualNodeIp = document.getElementById('manual-node').value;
+            const youtubeCheck = document.getElementById('youtube-check').checked;
+            const configFetchInterval = Number.parseInt(document.getElementById('config-fetch-interval').value, 10);
+            const heartbeatInterval = Number.parseInt(document.getElementById('heartbeat-interval').value, 10);
+            const frontendPollInterval = Number.parseInt(document.getElementById('frontend-poll-interval').value, 10);
+            if (!Number.isInteger(configFetchInterval) || configFetchInterval < 5 || configFetchInterval > 3600 || !Number.isInteger(heartbeatInterval) || heartbeatInterval < 10 || heartbeatInterval > 3600 || !Number.isInteger(frontendPollInterval) || frontendPollInterval < 5 || frontendPollInterval > 300) {
+                alert('间隔设置不合法：配置拉取 5-3600 秒，心跳 10-3600 秒，面板轮询 5-300 秒');
+                return;
+            }
+            if (mode === 'manual' && !manualNodeIp) {
+                alert('手动模式必须先选择一个可用节点');
+                return;
+            }
+            const res = await fetch('/api/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', 'X-Panel-Action': '1'},
+                body: JSON.stringify({slot_map: map, proxy_port: port, mode, manual_node_ip: manualNodeIp, youtube_check: youtubeCheck, config_fetch_interval: configFetchInterval, heartbeat_interval: heartbeatInterval, frontend_poll_interval: frontendPollInterval})
+            });
+            if (!res.ok) {
+                const problem = await res.json().catch(() => ({})); alert(problem.error || '配置保存失败，请稍后重试');
+                return;
+            }
+            pushLog('[控制中心广播] 国家路由策略已更新至节点。', 'SYS');
+            alert(`配置已下发，代理端口将切换为 ${port}。`);
+            loadConfig();
+            restartNodePolling(frontendPollInterval);
+        }
+
+        let nodePollingTimer;
+        function restartNodePolling(seconds) {
+            if (nodePollingTimer) clearInterval(nodePollingTimer);
+            nodePollingTimer = setInterval(fetchNodes, seconds * 1000);
+        }
+
+        async function fetchNodes() {
+            try {
+                const res = await fetch('/api/nodes');
+                const servers = await res.json();
+                const tbody = document.getElementById('nodes-table');
+                renderRemoteLogs(servers || []);
+                updateManualNodeOptions(servers || []);
+
+                if (!servers || servers.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" class="py-8 text-center text-gray-500">当前没有被纳管的机器，请在 VPS 运行右上角命令接入</td></tr>';
+                    return;
+                }
+
+                servers.forEach(s => {
+                    if (Math.random() > 0.6) {
+                        const dList = JSON.parse(s.details || '[]');
+                        const evtRand = Math.random();
+                        if (evtRand > 0.8) {
+                            pushLog(`节点 [${s.ip}] 心跳数据已同步，当前健康存活链路: ${dList.length}/1`, 'SUCCESS');
+                        } else if (evtRand > 0.5 && dList.length < 1) {
+                            pushLog(`节点 [${s.ip}] 正在从黄金储备池中提取“免死金牌”极品节点...`, 'INFO');
+                        } else if (evtRand > 0.3) {
+                            pushLog(`节点 [${s.ip}] 路由表重组完成，黄金历史节点已豁免下发。`, 'SYS');
+                        }
+                    }
+                });
+
+                tbody.innerHTML = servers.map(server => {
+                    const details = JSON.parse(server.details || '[]');
+                    const timeAgo = Math.floor((Date.now() - server.last_seen) / 1000);
+
+                    details.sort((a,b) => a.port - b.port);
+
+                    let proxyBadges = details.map(d =>
+                        `<div class="inline-flex items-center bg-gray-700 border border-gray-600 rounded px-2 py-1 mr-2 mb-2 text-xs">
+                            <span class="text-blue-400 font-bold mr-2">${d.country}</span>
+                            <span class="font-mono text-blue-200 mr-2" title="节点物理IP">${d.node_ip || '分配中...'}:${d.port}</span>
+                        </div>`
+                    ).join('');
+
+                    if (details.length === 0) proxyBadges = '<span class="text-yellow-500 text-xs">高容错极速调度中... 正在建立单端口稳定网络...</span>';
+
+                    return `
+                        <tr class="hover:bg-gray-750 transition-colors">
+                            <td class="py-4 px-4 font-mono text-lg text-blue-300 align-top">${server.ip}</td>
+                            <td class="py-4 px-4 align-top">${proxyBadges}</td>
+                            <td class="py-4 px-4 text-gray-400 align-top">${timeAgo}s 前</td>
+                            <td class="py-4 px-4 align-top text-right">
+                                <span class="${details.length === 1 ? 'bg-green-900 text-green-300' : 'bg-yellow-900 text-yellow-300'} py-1 px-3 rounded-full text-xs font-bold">${details.length} / 1</span>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+            } catch (err) {}
+        }
+
+        fetchCountries();
+        loadConfig();
+        fetchNodes();
+        fetch('/api/config').then(res => res.json()).then(config => restartNodePolling(config.frontend_poll_interval || 5)).catch(() => restartNodePolling(5));
+    </script>
+
+</body>
+</html>

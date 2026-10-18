@@ -1,0 +1,35 @@
+# 维护入口
+
+## 开始前
+
+1. 阅读 README、docs/ARCHITECTURE.md、docs/MAINTENANCE.md、docs/TESTING.md。
+2. 涉及 CF、汇总入口、权限时再读 docs/HUB.md；连接问题读 docs/NETWORK.md。
+3. 分清本地候选、GitHub 已发布文件、真实运行服务；三者可能不同版本。
+4. 检查会话已有授权。用户要求等待确认时，不部署真实服务、改路由或发布代码；先把本地结果做具体、可审查。
+
+## 必须保持的约束
+
+- 每台机器独立运行，不引入另一台 VPS 作为节点入口或中转。
+- 不修改用户电脑的 v2rayN 配置；测试用临时配置和独立核心进程。
+- 不覆盖既有 sing-box、x-ui、proxy-lite、其他 CF 隧道或 DNS 记录。
+- 不提交令牌、私钥、面板密码、订阅链接、真实运行配置和测试节点凭据。
+- 公共安装程序默认不接入维护者的私人汇总后台。
+- 无 UDP 时明确标注 TCP 替代，不能把 Trojan/VLESS WebSocket 称作 Hysteria2。
+- 配置生成不等于握手成功，本机成功不等于客户端所在网络可用。
+- 不清空防火墙、不全局结束 OpenVPN、不全局删除接口或路由。
+- 面板改住宅端口时同步原生与 WS 入口；失败回滚。
+
+## 修改与验证
+
+- src/install.sh 和 src/update.sh 是可维护入口，jkyj.sh/gengxin.sh 是生成文件。
+- 改 HTML、Python、模板后运行 python scripts/build.py。
+- 发布前运行 python scripts/check.py。涉及协议时执行 tests/integration_ws.py，见测试文档。
+- 新增服务、路径、字段、权限、外部依赖或退出码时，同步文档及卸载逻辑。
+- 云 API 记录自己创建的资源编号并复核归属，不按模糊前缀删除资源。
+- 更新 CHANGELOG.md 和测试文档，分别列出做过和没做过的验证。
+
+## 当前状态
+
+2026-10-18 网络适配与汇总试用版已发布，汇总 Worker 已上线并保留 LEGACY 服务绑定。未在 NVIDIA 主机安装新版，未完成用户网络节点验收；不能把云 API 测试写成三条节点实测。真实部署及待验收项目见 docs/TESTING.md。
+
+发布必须使用 release-files.json 白名单。制品目录中的历史二维码、链接文本可能是真实私人节点，不可整目录提交。私人模式的 CF 管理令牌只留在 Worker Secret，VPS 只持单机令牌。

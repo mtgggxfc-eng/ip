@@ -73,7 +73,7 @@ def active_configs():
     found = []
     for line in services.splitlines():
         service = line.split(None, 1)[0]
-        if not any(word in service.lower() for word in ('sing-box', 'sing_box', 's-box')):
+        if not any(word in service.lower() for word in ('sing-box', 'sing_box', 's-box')) and service != 'three-nodes.service':
             continue
         command = run('systemctl', 'show', '-p', 'ExecStart', '--value', service)
         matches = re.findall(r'(?:^|\s)-(?:c|-config)(?:=|\s+)([^\s;]+)', command)
@@ -160,7 +160,7 @@ def is_home(inbound, config):
 
 def discover():
     ip = public_ip()
-    result = {'ip': ip, 'tcp': '', 'udp': '', 'home': '', 'managed_tcp': '', 'managed_udp': '', 'managed_home': '', 'panel_url': '',
+    result = {'ip': ip, 'tcp': '', 'udp': '', 'udp_cert': '', 'home': '', 'managed_tcp': '', 'managed_udp': '', 'managed_home': '', 'panel_url': '',
               'panel_username': '', 'panel_password': '', 'source_configs': []}
     if not ip:
         return result
@@ -183,6 +183,8 @@ def discover():
                     if managed: result['managed_tcp'] = link
             elif inbound.get('type') == 'hysteria2':
                 link = link_for_hy2(inbound, ip, 'Hysteria2-UDP')
+                if not result['udp'] and link:
+                    result['udp_cert'] = (inbound.get('tls') or {}).get('certificate_path', '')
                 result['udp'] = result['udp'] or link
                 if managed: result['managed_udp'] = link
     if result['managed_home']:

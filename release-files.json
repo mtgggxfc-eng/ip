@@ -1,0 +1,10 @@
+{
+  "root_files": [
+    ".gitignore", ".gitattributes", "AGENTS.md", "CHANGELOG.md", "README.md", "使用说明.md",
+    "requirements-dev.txt", "release-files.json", "jkyj.sh", "gengxin.sh", "xiezai.sh", "xiezai.py",
+    "discover-existing.py", "residential-panel.py", "residential-agent.py", "residential-proxy.py",
+    "network-adapter.py", "verify-node.py", "panel-original.html"
+  ],
+  "source_directories": ["docs", "src", "scripts", "tests", "hub"],
+  "allowed_suffixes": [".md", ".py", ".sh", ".js", ".mjs", ".html", ".sql", ".toml", ".json"]
+}

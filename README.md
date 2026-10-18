@@ -1,33 +1,66 @@
-# ip：家宽节点一键部署
+# ip：独立节点与住宅出口部署
 
-在 Debian/Ubuntu VPS 的 SSH 终端执行：
+> 2026-10-18 试用版：安装器、汇总后台与维护源码同步发布。
+> 汇总后台已完成真实 HTTPS、D1、授权与 CF 资源生命周期验证；新版完整 VPS 安装、NVIDIA 映射 API 和用户网络验收仍待测试。
+
+支持 Debian / Ubuntu、systemd、x86_64 或 aarch64；住宅出口需要 `/dev/net/tun`。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mtgggxfc-eng/ip/main/jkyj.sh | { if [ "$(id -u)" -eq 0 ]; then bash; else sudo bash; fi; }
 ```
 
-卸载本脚本创建的组件，方便重新测试安装：
+**直接回车自动安装；输入 `2` 手动填写。** 自动模式不再询问各端口，使用随机空闲端口、`US`、`www.amazon.com`。已有配置会复用。
+
+| 环境 | 第一条 | 第二条 | 第三条 |
+|---|---|---|---|
+| 公网端口可用 | VLESS Reality TCP | Hysteria2 UDP | 住宅出口 Reality |
+| 直连不可用，已授权 CF 隧道 | VLESS WebSocket TLS | Trojan WebSocket TLS，TCP 替代 | 住宅出口 VLESS WebSocket TLS |
+
+优先选择通过检测的直连；没有 UDP 时，不用另一台 VPS 中转。节点与隧道程序均在本机运行，CF 是隧道服务提供方。
+
+最终复制区只包含本轮公开入口测试通过的节点，可能少于三条。脚本区分“本机测试”“VPS 访问公开入口”“客户端实测”。一次成功不能保证长期速度、稳定性或始终有指定国家的住宅出口。
+
+## 面板与自动化
+
+- 普通 VPS 优先申请公网 IP 证书；没有公网 80 的映射机器优先使用独立 CF 隧道。
+- 隧道失败且存在有效公网 TCP 映射及 DNS 授权时，尝试域名 DNS 验证证书作为备用。
+- 自动模式使用已保存的授权或环境变量。新机器无法自动读取维护者电脑的密钥；缺授权会明确提示，公开仓库不提供私人令牌。
+- 每台机器有独立隧道、凭据和状态。独立面板保留原页面布局与功能。
+- 汇总面板是可选组件，需要管理员签发的一次性接入码。公共脚本没有默认私人汇总地址。
+- 私人模式由汇总后台代建本机独立隧道/子域名，VPS 只拿自身运行凭据，不拿 CF 管理 API 令牌。
+- 私人用户先登录自己的汇总面板，点击“新增机器”，复制 15 分钟有效的专属安装命令；普通公开命令不会加入私人后台。
+- 尝试系统防火墙放行；NVIDIA 平台有 API 授权及明确接口编号时，可自动建立 TCP 映射。缺少权限或不支持的平台会输出后台操作提示。
+
+详见 [网络与自动化](docs/NETWORK.md)、[汇总面板与安全](docs/HUB.md)。
+
+## 查看与卸载
+
+```bash
+sudo cat /root/three-nodes-info.txt
+sudo cat /root/three-nodes-links.txt
+```
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mtgggxfc-eng/ip/main/xiezai.sh | { if [ "$(id -u)" -eq 0 ]; then bash; else sudo bash; fi; }
 ```
 
-卸载会删除本脚本创建的节点配置、独立面板、代理、面板证书与续期任务，以及保存的节点信息。原有的 sing-box、x-ui、proxy-lite 服务、系统依赖和防火墙规则保留；可能被其他服务复用的 Hysteria2 证书也会保留。发现同名但无法确认归属的服务或配置时，会先停止卸载并说明原因。卸载后重新安装，已删除组件的账号与节点密钥会重新生成。
+先预览：保存脚本后执行 `sudo bash xiezai.sh --dry-run`。卸载只处理能确认归属的本项目组件，保留原有 sing-box、x-ui、proxy-lite、共享证书、系统包和防火墙规则。新版也核对并清理本项目创建的云资源；失败时保留授权，便于重试。`--keep-cloudflare` 可保留云端资源和清理资料。
 
-只预览卸载范围时，使用 root 执行 `bash <(curl -fsSL https://raw.githubusercontent.com/mtgggxfc-eng/ip/main/xiezai.sh) --dry-run`。
+## 给维护者和 AI
 
-脚本会检查**正在运行的 sing-box 配置**：能恢复的 VLESS + Reality TCP、Hysteria2 UDP、住宅出口节点直接输出；缺少的节点再补建。住宅管理面板与出口缺失时，在 VPS 上部署独立面板和 OpenVPN 住宅代理。重复执行会打印已有信息，不因为系统装过 sing-box 就停止。
+先读 [AGENTS.md](AGENTS.md) 和 [维护手册](docs/MAINTENANCE.md)。入口模板是 `src/install.sh`，不要手改生成脚本里的 Base64。
+发布严格使用 release-files.json 清单；制品目录可能有以前生成的私人二维码与链接，不能整目录上传。
 
-安装时需要交互式 SSH 终端。提示端口时直接回车会随机选择空闲端口；住宅出口默认国家 `US`，Reality 默认伪装域名 `www.amazon.com`。完成后三条纯节点链接会连续显示，可一起复制导入 v2rayN。链接另存为 `/root/three-nodes-links.txt`；新部署的面板信息另存为 `/root/three-nodes-info.txt`，仅 root 可读。
+```bash
+python scripts/build.py
+python scripts/check.py
+```
 
-面板复用现有原版的页面和操作布局，保留自动/手动节点、国家、端口、强制换 IP、YouTube 检测、轮询间隔、候选节点和实时日志等功能。每台 VPS 独立管理。再次执行同一条命令，会更新本脚本安装的面板，保留节点链接和登录信息。
+- [架构、文件职责、接口和运行路径](docs/ARCHITECTURE.md)
+- [网络模式、证书、端口、环境变量](docs/NETWORK.md)
+- [统一面板、权限、部署和迁移](docs/HUB.md)
+- [构建、升级、回滚、故障处理](docs/MAINTENANCE.md)
+- [测试证据与尚未验证项目](docs/TESTING.md)
+- [变更记录](CHANGELOG.md)
 
-脚本会自动申请 Let’s Encrypt 公网 IP 正式证书，并每 12 小时检查续期，无需准备域名。需要系统 Python 3.10 以上，且公网 **TCP 80** 可到达 VPS、未被其他程序占用；本机 UFW 若启用会自动放行。云平台安全列表仍需放行 80。失败时终端会显示具体错误，面板暂时保留临时证书、节点继续使用；排除原因后再次执行即可重试。正式证书加载后，请关闭旧浏览器页面并重新打开。参考 [Let’s Encrypt IP 证书说明](https://letsencrypt.org/2026/03/11/shorter-certs-certbot)。
-
-住宅出口来自 VPNGate 上游节点，是否能取得指定国家的可用住宅 IP 取决于上游供应；脚本会显示出口状态和失败日志。
-
-出口状态在面板更新完成后重新检测；没有代码或内部接口变化时，不重启正在运行的住宅代理。未连通时会显示程序日志及 OpenVPN 日志。公网节点端口和面板端口应放行**入站**；本机住宅出站检测不经过这些入站端口。若云平台出站默认全部允许，无需另开面板的出站端口；严格限制出站时，还需允许 DNS、HTTPS 和上游 OpenVPN 配置指定的 TCP/UDP 端口。
-
-本脚本独立使用 `residential-panel.service`、`residential-agent.service`、`three-nodes.service`、`/opt/residential-stack-agent` 和 `tun90`，不覆盖已有 sing-box 服务或旧住宅代理。若主机只有 x-ui 节点且没有可读的活动 sing-box 配置，脚本会补建独立节点。云平台的安全列表仍需放行新建的公网 TCP/UDP 端口；本机 UFW 若已启用，脚本会自动添加规则。
-
-住宅代理的节点选择逻辑改编自用户现有住宅面板部署，原项目见 [Free-Residential-IP-Proxy-Controller](https://github.com/a6216abcd/Free-Residential-IP-Proxy-Controller)。安装脚本和仓库不含面板账号、代理密码、Cloudflare Token 或 VPS 私钥；新部署的凭据在 VPS 上随机生成。
+住宅选择逻辑源自用户原有部署，上游项目：[Free-Residential-IP-Proxy-Controller](https://github.com/a6216abcd/Free-Residential-IP-Proxy-Controller)。候选来自 VPNGate；“住宅”名称不保证 IP 类型、信誉或地理位置。

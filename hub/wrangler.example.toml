@@ -1,0 +1,27 @@
+name = "ip-hub"
+main = "worker.js"
+compatibility_date = "2026-10-18"
+workers_dev = false
+
+[vars]
+ALLOWED_PANEL_ZONES = "example.com"
+
+[[rules]]
+type = "Text"
+globs = ["**/*.html"]
+fallthrough = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ip-hub"
+database_id = "REPLACE_WITH_YOUR_DATABASE_ID"
+
+# ADMIN_USER / ADMIN_PASSWORD / CREDENTIAL_KEY must be Worker Secrets.
+# Optional private provisioning uses CF_API_TOKEN, CF_ACCOUNT_ID, CF_ZONE_ID,
+# CF_ZONE_NAME as Worker Secrets. Never return the API token to a VPS.
+# Existing legacy Worker can optionally be bound here, without copying its code.
+# [[services]]
+# binding = "LEGACY"
+# service = "REPLACE_WITH_EXISTING_WORKER_NAME"
+# Its credentials must be LEGACY_USER / LEGACY_PASSWORD Worker Secrets.
+# Add the real custom-domain route only after testing on a separate hostname.

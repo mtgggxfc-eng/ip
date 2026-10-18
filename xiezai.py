@@ -22,6 +22,12 @@ UNIT_SIGNATURES = {
         'ExecStart=/etc/residential-stack/renew-panel-cert.sh'),
     'residential-cert-renew.timer': ('Description=Check residential panel IP certificate twice daily',
         '[Timer]'),
+    'residential-ws.service': ('Description=Independent residential WebSocket entries',
+        r'^ExecStart=\S+ run -c /etc/residential-stack/ws\.json$'),
+    'residential-tunnel.service': ('Description=Independent residential Cloudflare tunnel',
+        'ExecStart=/opt/residential-stack-bin/cloudflared tunnel --no-autoupdate run --token-file /etc/residential-stack/tunnel.token'),
+    'residential-firewall.service': ('Description=Open only ip installer host ports',
+        'ExecStart=/usr/bin/python3 /etc/residential-stack/network-adapter.py firewall'),
 }
 
 
@@ -109,7 +115,7 @@ def inventory(base=pathlib.Path('/')):
     if node_owned or stack_owned:
         binary_dir = plan.path('/opt/residential-stack-bin')
         if exists(binary_dir):
-            if binary_dir.is_dir() and not binary_dir.is_symlink() and set(p.name for p in binary_dir.iterdir()) <= {'sing-box'}:
+            if binary_dir.is_dir() and not binary_dir.is_symlink() and set(p.name for p in binary_dir.iterdir()) <= {'sing-box', 'cloudflared'}:
                 add_target(plan, '/opt/residential-stack-bin', directory=True)
             else:
                 plan.preserved.append('包含额外文件的目录：/opt/residential-stack-bin')
@@ -120,7 +126,7 @@ def inventory(base=pathlib.Path('/')):
         else:
             plan.preserved.append('无法确认的证书程序目录：/opt/residential-certbot')
     links = plan.path('/root/three-nodes-links.txt')
-    if re.fullmatch(r'(?:vless|hysteria2)://[^\s]+\n(?:vless|hysteria2)://[^\s]+\n(?:vless|hysteria2)://[^\s]+\n?', text(links)):
+    if re.fullmatch(r'(?:(?:vless|hysteria2|trojan)://[^\s]+\n?){1,3}', text(links)) or (stack_owned and links.is_file() and not text(links)):
         add_target(plan, '/root/three-nodes-links.txt')
     info = plan.path('/root/three-nodes-info.txt')
     saved = text(info)
@@ -150,7 +156,8 @@ def execute(plan, runner=run_command):
             except (ValueError, TypeError):
                 pass
     # Stop the renewal timer before its service; stop nodes before the agent.
-    order = ('residential-cert-renew.timer', 'residential-cert-renew.service', 'three-nodes.service',
+    order = ('residential-cert-renew.timer', 'residential-cert-renew.service', 'residential-firewall.service',
+             'residential-tunnel.service', 'residential-ws.service', 'three-nodes.service',
              'residential-agent.service', 'residential-panel.service')
     for unit in order:
         if unit in plan.units:
@@ -178,6 +185,7 @@ def execute(plan, runner=run_command):
 def main():
     parser = argparse.ArgumentParser(description='卸载 ip 脚本创建的组件；保留已有节点服务和系统依赖。')
     parser.add_argument('--dry-run', action='store_true', help='只显示将卸载的内容')
+    parser.add_argument('--keep-cloudflare', action='store_true', help='保留云端资源和清理凭据，以后自行清理')
     args = parser.parse_args()
     if os.geteuid() != 0:
         print('请使用 root 或 sudo 运行卸载命令。', file=sys.stderr)
@@ -196,6 +204,20 @@ def main():
         if args.dry_run:
             print('预览结束，未执行卸载。')
         else:
+            network = plan.path('/etc/residential-stack/network.json')
+            state = json.loads(text(network)) if network.exists() else {}
+            if state.get('tunnel_id') or state.get('dns') or state.get('air_services') or state.get('hub_registered'):
+                if args.keep_cloudflare:
+                    backup = plan.path('/root/ip-cloudflare-cleanup')
+                    backup.mkdir(mode=0o700, exist_ok=True)
+                    for name in ('network.json', 'cloudflare.json', 'air.json', 'hub.json', 'network-adapter.py'):
+                        src = plan.path('/etc/residential-stack/' + name)
+                        if src.exists(): shutil.copy2(src, backup / name); (backup / name).chmod(0o600)
+                    print('云端资源已保留，清理凭据保存在 /root/ip-cloudflare-cleanup。')
+                else:
+                    if 'residential-tunnel.service' in plan.units:
+                        run_command(['systemctl', 'stop', 'residential-tunnel.service'], check=True)
+                    run_command(['/usr/bin/python3', '/etc/residential-stack/network-adapter.py', 'cleanup-cloudflare'], check=True)
             execute(plan)
             print('卸载完成，可以重新执行安装命令进行测试。')
     print('原有 sing-box、x-ui、proxy-lite 服务及系统软件包和防火墙规则保留。')
