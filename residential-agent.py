@@ -7,7 +7,9 @@ LOCAL_SSL_CONTEXT = ssl.create_default_context(cafile="/etc/residential-stack/pa
 MAX_CONCURRENT_NODES = 1
 BASE_PROXY_PORT = int(json.loads(Path("/etc/residential-stack/settings.json").read_text())["proxy_port"])
 API_URL = "https://www.vpngate.net/api/iphone/"
-C2_URL = "https://127.0.0.1:" + str(json.loads(Path("/etc/residential-stack/settings.json").read_text())["panel_port"])
+LOCAL_SETTINGS = json.loads(Path("/etc/residential-stack/settings.json").read_text())
+C2_URL = ("http://127.0.0.1:" + str(LOCAL_SETTINGS['agent_port']) if LOCAL_SETTINGS.get('agent_port')
+          else "https://127.0.0.1:" + str(LOCAL_SETTINGS['panel_port']))
 
 WORKSPACE = Path("/opt/residential-stack-agent")
 CONFIG_DIR = WORKSPACE / "configs"
