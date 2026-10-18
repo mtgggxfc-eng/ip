@@ -6,6 +6,16 @@
 curl -fsSL https://raw.githubusercontent.com/mtgggxfc-eng/ip/main/jkyj.sh | { if [ "$(id -u)" -eq 0 ]; then bash; else sudo bash; fi; }
 ```
 
+卸载本脚本创建的组件，方便重新测试安装：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mtgggxfc-eng/ip/main/xiezai.sh | { if [ "$(id -u)" -eq 0 ]; then bash; else sudo bash; fi; }
+```
+
+卸载会删除本脚本创建的节点配置、独立面板、代理、面板证书与续期任务，以及保存的节点信息。原有的 sing-box、x-ui、proxy-lite 服务、系统依赖和防火墙规则保留；可能被其他服务复用的 Hysteria2 证书也会保留。发现同名但无法确认归属的服务或配置时，会先停止卸载并说明原因。卸载后重新安装，已删除组件的账号与节点密钥会重新生成。
+
+只预览卸载范围时，使用 root 执行 `bash <(curl -fsSL https://raw.githubusercontent.com/mtgggxfc-eng/ip/main/xiezai.sh) --dry-run`。
+
 脚本会检查**正在运行的 sing-box 配置**：能恢复的 VLESS + Reality TCP、Hysteria2 UDP、住宅出口节点直接输出；缺少的节点再补建。住宅管理面板与出口缺失时，在 VPS 上部署独立面板和 OpenVPN 住宅代理。重复执行会打印已有信息，不因为系统装过 sing-box 就停止。
 
 安装时需要交互式 SSH 终端。提示端口时直接回车会随机选择空闲端口；住宅出口默认国家 `US`，Reality 默认伪装域名 `www.amazon.com`。完成后三条纯节点链接会连续显示，可一起复制导入 v2rayN。链接另存为 `/root/three-nodes-links.txt`；新部署的面板信息另存为 `/root/three-nodes-info.txt`，仅 root 可读。
