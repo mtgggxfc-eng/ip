@@ -188,8 +188,52 @@ class NetworkTests(unittest.TestCase):
         summary=(self.root/'three-nodes-info.txt').read_text(encoding='utf-8')
         self.assertIn('https://192.0.2.10:30443/',summary)
         self.assertIn('已生成，公网检测未通过',summary)
-        self.assertIn('住宅代理内部端口 30101',summary)
+        self.assertNotIn('住宅代理内部端口',summary)
+        detail=(self.root/'deployment-details.txt').read_text(encoding='utf-8')
+        self.assertIn('住宅代理内部端口 30101',detail)
         self.assertEqual(n.read(self.root/'network-report.json')['ready_roles'],[])
+
+    def test_unmapped_summary_keeps_native_links_and_one_action_list(self):
+        state={'mode':'mapped','udp_available':False,'mappings':{}}
+        settings={'public_ip':'192.0.2.10','panel_port':21479,'proxy_port':53583}
+        native={'tcp':'vless://test@192.0.2.10:45624','udp':'','home':'vless://home@192.0.2.10:34735'}
+        exported=n.generated_exports({'tcp':[''],'udp':[],'home':['']},{},native)
+        with patch.dict(os.environ,{},clear=True):
+            text=n.concise_result(state,settings,{'username':'test','password':'test-password'},native,exported,{},[],[],True,[])
+        self.assertIn(native['tcp'],text);self.assertIn(native['home'],text)
+        self.assertIn('需改为平台分配的外部地址、外部端口',text)
+        self.assertEqual(text.count('下一步：'),1)
+        self.assertEqual(text.count('21479'),1)
+        self.assertIn('第二条未生成',text)
+        self.assertNotIn('53583',text)
+        self.assertNotIn('NVIDIA',text)
+        self.assertLess(len(text.splitlines()),25)
+
+    def test_working_cf_summary_lists_optional_native_ports_once(self):
+        state={'mode':'mapped','udp_available':False,'mappings':{},'private_hosts':{'panel':'panel.example.com'}}
+        n.ws_config(state,{'proxy_port':53583},{'socks_username':'test','socks_password':'test'})
+        native={'tcp':'vless://test@192.0.2.10:45624','udp':'','home':'vless://home@192.0.2.10:34735'}
+        exported={r:n.ws_uri(r,state['ws'][r],r+'.example.com') for r in ('tcp','udp','home')}
+        settings={'public_ip':'192.0.2.10','panel_port':21479}
+        with patch.dict(os.environ,{},clear=True):
+            text=n.concise_result(state,settings,{'username':'test','password':'test-password'},native,exported,exported,['https://panel.example.com/'],[],True,[])
+        self.assertIn('无需新增公网入站映射',text)
+        self.assertIn('备用直连端口（可选，需在平台创建映射）',text)
+        self.assertEqual(text.count('45624'),1);self.assertEqual(text.count('21479'),1);self.assertEqual(text.count('34735'),1)
+        self.assertIn('不是 Hysteria2',text)
+        self.assertEqual(text.count('节点链接（'),1)
+
+    def test_quiet_command_preserves_failure_and_private_diagnostics(self):
+        source=(ROOT/'src/install.sh').read_text(encoding='utf-8')
+        function=next(line for line in source.splitlines() if line.startswith('quiet()'))
+        windows_bash=pathlib.Path('C:/Program Files/Git/bin/bash.exe')
+        bash=str(windows_bash) if windows_bash.exists() else 'bash'
+        log=self.root/'install.log'
+        script=function+'\nIP_INSTALL_LOG="$1"\nquiet bash -c \'echo detail; echo problem >&2; exit 7\'\n'
+        result=subprocess.run([bash,'-c',script,'quiet-test',str(log)],capture_output=True,text=True)
+        self.assertEqual(result.returncode,7)
+        self.assertEqual(result.stdout,'');self.assertEqual(result.stderr,'')
+        self.assertIn('detail',log.read_text());self.assertIn('problem',log.read_text())
 
     def test_unmapped_host_never_exports_egress_ip_as_incoming_address(self):
         state={'mode':'mapped','udp_available':False,'mappings':{}}

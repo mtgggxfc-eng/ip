@@ -308,10 +308,83 @@ def choose_verified(candidates, test):
     return selected, results
 
 
-def generated_exports(candidates, selected):
+def generated_exports(candidates, selected, native_links=None):
     """Export configured addresses even before ports open; readiness stays separate."""
-    return {role: selected.get(role) or next((uri for uri in candidates.get(role, []) if uri), '')
+    return {role: selected.get(role) or next((uri for uri in candidates.get(role, []) if uri), '') or (native_links or {}).get(role, '')
             for role in ('tcp', 'udp', 'home')}
+
+
+def concise_result(state, settings, auth, native, exported, selected, panels, pending_panels, hub_ok, port_report):
+    """Show generated configuration and the next action once. Details live in logs."""
+    roles = ('tcp', 'udp', 'home')
+    names = {'tcp': 'TCP 节点', 'udp': '第二条节点', 'home': '住宅节点'}
+    count = sum(bool(exported.get(r)) for r in roles)
+    ready = len(selected) == 3 and panels and hub_ok
+    lines = ['部署结果：' + ('三个节点检测通过。' if ready else '已生成 ' + str(count) + ' 个节点，仍有设置待完成。')]
+    raw_mapping = [r for r in roles if state['mode'] == 'mapped' and exported.get(r) and
+                   r not in selected and exported[r] == native.get(r) and
+                   not (state.get('external_address') and state.get('mappings', {}).get(r))]
+    if count:
+        lines += ['', '节点链接（可一起复制导入）：', *[exported[r] for r in roles if exported.get(r)]]
+    if raw_mapping:
+        lines.append('上述原始链接的地址和端口需改为平台分配的外部地址、外部端口。')
+    waiting = [names[r] for r in roles if exported.get(r) and r not in selected]
+    if waiting: lines.append('状态：已生成，公网检测未通过（' + '、'.join(waiting) + '）。')
+    if not exported.get('udp'):
+        lines.append('第二条未生成：未确认 UDP 支持，也未配置可用的 TCP 替代入口。' if not state.get('udp_available') else '第二条未生成，请查看详细日志。')
+    elif exported['udp'].startswith('trojan://'):
+        lines.append('第二条为 Trojan TCP 替代，不是 Hysteria2。')
+    panel = (panels or pending_panels or [''])[0]
+    lines += ['', '住宅管理面板：' + (panel or 'https://外部地址:外部端口/（需填写平台映射）'),
+              '面板用户名：' + auth['username'], '面板密码：' + auth['password']]
+    if panel and not panels: lines.append('面板待验证，请检查端口和证书。')
+    # Only the entries actually exported through native listeners need these
+    # ports. Do not advertise unused native backups for working CF WS links.
+    native_roles = [r for r in roles if native.get(r) and (exported.get(r) == native[r] or
+                    state['mode'] == 'mapped' and state.get('external_address') and state.get('mappings', {}).get(r) and
+                    exported.get(r) == mapped_link(native[r], state['external_address'], state['mappings'][r]))]
+    cf_panels = {state.get(key, {}).get('panel') for key in ('private_hosts', 'tunnel_hosts')}
+    panel_native = not panel or urllib.parse.urlsplit(panel).hostname not in cf_panels
+    needed = []
+    for r in native_roles:
+        uri = urllib.parse.urlsplit(native[r])
+        proto = 'UDP' if uri.scheme in ('hysteria2', 'hy2') else 'TCP'
+        needed.append((proto, uri.port, names[r]))
+    if panel_native: needed.append(('TCP', settings['panel_port'], '住宅面板'))
+    if needed:
+        if ready:
+            lines += ['', '下一步：复制节点导入客户端。',
+                      '如外部连接失败，检查平台' + ('端口映射：' if state['mode'] == 'mapped' else '入站放行：') +
+                      '、'.join(dict.fromkeys(proto + ' ' + str(port) for proto, port, _ in needed)) + '。']
+        elif state['mode'] == 'mapped':
+            lines += ['', '下一步：在平台后台创建以下端口映射：']
+            lines += [proto + ' ' + str(port) + '（' + name + '）' for proto, port, name in needed]
+            lines.append('然后重跑安装命令，选择 2，填写平台给出的外部地址和外部端口。')
+        else:
+            lines += ['', '下一步：在云平台放行入站端口：' + '、'.join(dict.fromkeys(proto + ' ' + str(port) for proto, port, _ in needed)) + '。']
+    elif ready:
+        lines += ['', '下一步：复制节点导入客户端；无需新增公网入站映射。']
+    else:
+        lines += ['', '下一步：检查隧道连接，稍后重跑安装命令。']
+    optional = []
+    for r in roles:
+        if native.get(r) and r not in native_roles:
+            uri = urllib.parse.urlsplit(native[r])
+            optional.append(('UDP' if uri.scheme in ('hysteria2', 'hy2') else 'TCP') + ' ' + str(uri.port))
+    if not panel_native: optional.append('TCP ' + str(settings['panel_port']))
+    if optional:
+        lines.append('备用直连端口（可选，' + ('需在平台创建映射' if state['mode'] == 'mapped' else '需在云平台放行入站') + '）：' + '、'.join(dict.fromkeys(optional)) + '。')
+    failed_host = any(not item.get('host_opened') for item in port_report if any(item.get('protocol') == proto.lower() and item.get('internal_port') == port for proto, port, _ in needed))
+    if failed_host: lines.append('本机防火墙放行失败，还需检查上述端口的系统防火墙规则。')
+    private = bool(os.environ.get('IP_HUB_URL') or read(ROOT / 'hub.json').get('url'))
+    if private and not hub_ok:
+        lines.append('汇总接入未完成：检查面板和隧道后重跑原命令。' if read(ROOT / 'hub.json').get('machine_token') else
+                     '私人授权未完成：从汇总面板重新取得有效命令后重试。')
+    elif state['mode'] == 'mapped' and not exported.get('udp'):
+        lines.append('需要第二条 TCP 替代入口：重跑命令选 2，填写自己的 CF 域名和令牌。')
+    log = os.environ.get('IP_INSTALL_LOG') or str(ROOT / 'deployment-details.txt')
+    lines += ['', '详细日志：' + log]
+    return '\n'.join(lines) + '\n'
 
 
 def pending_panel_urls(state, settings):
@@ -510,7 +583,7 @@ def apply():
     candidates = {role: [links.get(role, '')] for role in ('tcp', 'udp', 'home')}
     errors, panel_urls = [], []
     if state['mode'] == 'mapped':
-        try: print(auto_air_mappings(state, links, settings), flush=True)
+        try: auto_air_mappings(state, links, settings)
         except (OSError, RuntimeError, ValueError, urllib.error.URLError) as exc:
             errors.append(safe_error(exc))
         configure_mappings(state, links, settings)
@@ -534,8 +607,6 @@ def apply():
         raise ValueError('端口服务归属无法确认，未覆盖')
     firewall_unit.write_text(firewall_text)
     run(['systemctl', 'daemon-reload']); run(['systemctl', 'enable', 'residential-firewall.service'])
-    print('\n已生成本机服务；可以先按以下信息在平台放行或映射端口：\n' +
-          '\n'.join(access_instructions(state, settings, links)) + '\n', flush=True)
     if state['mode'] == 'mapped':
         # No repeated public-IP HTTP-01 attempts on an unmapped machine.
         if state.get('certificate_mode') != 'domain' and (UNITS / 'residential-cert-renew.timer').exists():
@@ -550,7 +621,7 @@ def apply():
     def test(link):
         if link not in checked: checked[link] = verifier.verify(link, binary)
         return dict(checked[link])
-    print('\n正在检查公开入口和实际出站，请稍候……', flush=True)
+    print('\n正在检查节点，请稍候……', flush=True)
     native_good = {role: any(link and test(link)['ok'] for link in candidates[role]) for role in candidates}
     private = bool(os.environ.get('IP_HUB_URL') or read(ROOT / 'hub.json').get('url')) and os.environ.get('IP_PRIVATE_RESOURCES', '1') != '0'
     # The private hub accepts only its authorized HTTPS hostnames, never a raw IP
@@ -591,7 +662,7 @@ def apply():
             uri = ws_uri(role, state['ws'][role], assigned_hosts[role])
             if uri not in candidates[role]: candidates[role].append(uri)
     selected, checks = choose_verified(candidates, test)
-    exported = generated_exports(candidates, selected)
+    exported = generated_exports(candidates, selected, links)
     pending_panels = [u for u in pending_panel_urls(state, settings) if u not in panel_urls]
     report = {'schema': 1, 'mode': state['mode'], 'checks': checks, 'ports': port_report,
               'errors': errors, 'panel_urls': panel_urls, 'ready_roles': list(selected),
@@ -637,8 +708,13 @@ def apply():
               '详细检测：/etc/residential-stack/network-report.json',
               '未通过的候选链接：/etc/residential-stack/candidate-links.json（仅管理员可读）']
     summary = '\n'.join(lines) + '\n'
-    info = pathlib.Path('/root/three-nodes-info.txt'); info.write_text(summary, encoding='utf-8'); info.chmod(0o600)
-    print('\n' + summary)
+    detail = ROOT / 'deployment-details.txt'; detail.write_text(summary, encoding='utf-8'); detail.chmod(0o600)
+    install_log = os.environ.get('IP_INSTALL_LOG')
+    if install_log:
+        with open(install_log, 'a', encoding='utf-8') as stream: stream.write('\n' + summary)
+    concise = concise_result(state, settings, auth, links, exported, selected, panel_urls, pending_panels, hub_ok, port_report)
+    info = pathlib.Path('/root/three-nodes-info.txt'); info.write_text(concise, encoding='utf-8'); info.chmod(0o600)
+    print('\n' + concise)
     return 0 if len(selected) == 3 and panel_urls and hub_ok else 2
 
 

@@ -2,6 +2,8 @@
 
 ## 当前版本边界
 
+终端已改为精简结果。映射未配置时复制区可以含需要改地址/端口的原始链接，不代表已得到公网入口。CF 正常时仍按用户要求显示可选备用端口。系统安装细节查看当次 /root/ip-install.*.log，完整检测说明查看 /etc/residential-stack/deployment-details.txt，均可能含凭据，不提交日志。
+
 2026-10-19 修复已生成信息隐藏、面板端口漏报，以及私人授权 hub_request 请求头遗漏。复制区可以包含待放行入口；links.json 的就绪含义保持不变。具体测试见 TESTING.md。
 
 2026-10-18 已发布试用版，汇总 Worker 已上线，旧 Worker 保留为 LEGACY 绑定。本轮没有在用户 VPS 安装新版。后续维护必须核对 GitHub 提交、线上 Worker 和 VPS 服务，不能只根据本地文件判断已部署。验证范围见 TESTING.md。

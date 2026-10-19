@@ -16,7 +16,7 @@ prepare() 检查已有 network.json。新实例的默认路由源地址为 link-
 
 1. 已有或新建的原生入口；映射环境必须替换为真实外部地址和端口。
 2. 同机独立 CF 隧道入口。
-3. 都失败时，复制区仍保留外部地址明确的已生成入口，逐条标注未通过；验证通过清单仍只保存在 links.json。没有映射地址的入口不编造公网 URI。
+3. 都失败时，复制区仍保留已生成的原始入口；无映射时明确标注地址/端口待替换，不能把原始出口 IP 当成可用入站。验证通过清单仍只保存在 links.json。没有创建的协议不输出假链接。
 
 第二个角色的键仍叫 udp，用于兼容已有 links.json；该角色可能选中 Trojan WebSocket TCP。查看 URI 协议和终端真实标签，不能按角色键判断协议。
 
@@ -97,7 +97,15 @@ verify-node.py 为每个候选启动临时 sing-box，只监听 loopback。经�
 
 2026-10-19 起：/root/three-nodes-links.txt 是已生成链接的复制区，包括公网检测失败、等待端口开放的入口；/etc/residential-stack/links.json 继续只保存已通过验证的入口。network-report.json 的 generated_roles 与 ready_roles 分别记录生成和就绪，pending_panel_urls 记录未通过验证的面板候选。
 
-面板 TCP 内部端口始终参加系统放行和终端提示，不再要求先有云端映射才显示。住宅内部 SOCKS/API/WS 端口不建议暴露公网。映射未知时面板仅给出本机 HTTPS 地址，必须取得真实映射才能给出外部链接；公网出口 IP 不能替代映射地址。
+面板 TCP 内部端口始终参加系统放行和终端提示，不再要求先有云端映射才显示。住宅内部 SOCKS/API/WS 端口不建议暴露公网。映射未知时终端显示面板映射模板，必须取得真实映射才能组成外部链接；公网出口 IP 不能替代映射地址。
+
+### 简洁输出与原始链接
+
+终端与 /root/three-nodes-info.txt 使用 concise_result()，只显示生成数/状态、链接复制区、面板地址或模板、登录信息及下一步。节点原始链接通过 generated_exports() 的 native_links 回退输出；即使映射未知也保留配置，必须明确提示替换地址/端口，不能升级 ready_roles 或写入已验证 links.json。
+
+需要手动开放/映射的端口只列一次；已工作的 CF 链路不显示重复的必需入站步骤，但按用户要求保留一行“备用直连端口（可选）”。完整说明保存 /etc/residential-stack/deployment-details.txt；安装器另创建本次 /root/ip-install.XXXXXX.log，使用 umask 077，通过 IP_INSTALL_LOG 传给子进程。
+
+quiet() 只捕获不需要用户交互的命令输出，保留退出码。不要全局重定向：初始菜单及手动参数提示必须可见。apt、下载进度、systemd 启用记录、更新器和本机握手细节写入日志；错误仍显示失败阶段与日志路径。安装日志在卸载后保留，便于排障；需由 root 自行清理。不使用尾部重复总结覆盖已显示的下一步。
 
 私人授权请求必须保留明确 User-Agent。CF 403/1010 或 HTML 拦截页表示边缘拦截，不能直接判定登记码过期；后台 JSON 403 才提示码无效/过期/已用或机器授权失效，不输出原始响应中的任意内容。
 

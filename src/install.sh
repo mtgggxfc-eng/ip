@@ -21,17 +21,17 @@ error_report() {
   if command -v systemctl >/dev/null 2>&1; then
     for service in residential-panel.service residential-agent.service three-nodes.service; do
       if systemctl list-unit-files "$service" --no-legend 2>/dev/null | grep -q "$service"; then
-        printf '\n%s 最近日志：\n' "$service" >&2
-        journalctl -u "$service" -n 5 --no-pager -o cat 2>/dev/null >&2 || true
+        if [[ -n "${IP_INSTALL_LOG:-}" ]]; then journalctl -u "$service" -n 5 --no-pager -o cat >>"$IP_INSTALL_LOG" 2>&1 || true; fi
       fi
     done
   fi
-  printf '\n已安装的部分不会自动删除，以保留故障线索。\n' >&2
+  printf '\n请查看日志：%s\n' "${IP_INSTALL_LOG:-本阶段未创建日志}" >&2
   exit "$code"
 }
 trap 'error_report $LINENO' ERR
 die() { printf '安装停止：%s\n' "$*" >&2; exit 1; }
 note() { printf '\n==> %s\n' "$*"; }
+quiet() { "$@" >>"$IP_INSTALL_LOG" 2>&1; }
 valid_port() { [[ "$1" =~ ^[0-9]+$ ]] && (( 1 <= 10#$1 && 10#$1 <= 65535 )); }
 port_free() {
   local port=$1 proto=$2
@@ -62,15 +62,15 @@ ask_port() {
   port_free "$answer" "$proto" || die "$label 端口 $answer 已被占用。"
   printf -v "$name" '%s' "$answer"
   USED_PORTS+=("$answer")
-  printf '已选择 %s/%s\n' "$answer" "$proto"
+  printf '%s：%s/%s\n' "$label" "$answer" "$proto" >>"$IP_INSTALL_LOG"
 }
 
 upgrade_panel() {
   local updater
   updater="$(mktemp)"
   printf '%s' '__UPDATER_B64__' | base64 -d > "$updater"
-  if ! IP_PUBLIC="$PUBLIC_IP" IP_LINK_TCP="$1" IP_LINK_UDP="$2" IP_LINK_HOME="$3" bash "$updater"; then
-    printf '面板更新遇到错误，请查看上方原因；已有节点链接仍会输出。\n' >&2
+  if ! IP_PUBLIC="$PUBLIC_IP" IP_LINK_TCP="$1" IP_LINK_UDP="$2" IP_LINK_HOME="$3" quiet bash "$updater"; then
+    printf '面板更新未完成，详情见日志。\n' >&2
   fi
   rm -f "$updater"
 }
@@ -96,7 +96,7 @@ PY
     return 0
   fi
   port="${values[0]}"; user="${values[1]}"; password="${values[2]}"
-  printf '\n==> 面板更新完成，检测当前住宅出口（最多等待约 90 秒）\n'
+  note '正在检查住宅出口，请稍候…'
   for attempt in {1..6}; do
     if ! systemctl is-active --quiet residential-agent.service; then
       HOME_STATUS='住宅代理服务未正常运行，请查看下方程序日志'
@@ -129,13 +129,16 @@ show_home_diagnostics() {
 }
 
 [[ $EUID -eq 0 ]] || die '请用 root 或 sudo 运行。'
+IP_INSTALL_LOG="$(mktemp /root/ip-install.XXXXXX.log)"
+export IP_INSTALL_LOG
 command -v apt-get >/dev/null || die '目前支持 Debian/Ubuntu。'
 command -v systemctl >/dev/null || die '需要 systemd。'
 case "$(uname -m)" in x86_64|aarch64) ;; *) die "不支持的 CPU 架构：$(uname -m)" ;; esac
 if ! command -v python3 >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -q
-  apt-get install -y python3
+  note '准备运行环境…'
+  quiet apt-get update -q
+  quiet apt-get install -y python3
 fi
 [[ -r /dev/tty ]] || die '需要交互式 SSH 终端。'
 if [[ -z "${IP_SETUP_MODE:-}" ]]; then
@@ -170,9 +173,6 @@ finish_network() {
     chmod 600 "$STACK_DIR/verify-node.py"
     NETWORK_RESULT=0
     python3 "$STACK_DIR/network-adapter.py" apply || NETWORK_RESULT=$?
-    if [[ "$NETWORK_RESULT" != 0 ]]; then
-      printf '\n服务配置已保留；部分公网入口尚未通过。已生成的链接和端口见上方，可先开放/映射端口再重跑检查。\n' >&2
-    fi
   fi
   rm -f "$NETWORK_TOOL"
 }
@@ -193,7 +193,7 @@ if [[ -n "$EXIST_TCP" && ( -n "$EXIST_UDP" || "$IP_DISABLE_UDP" == 1 ) && -n "$E
   printf '节点入口服务处于运行状态；家宽出口是否可用，请在面板中查看。\n'
   if [[ -n "${HOME_STATUS:-}" ]]; then
     printf '家宽出口状态：%s\n' "$HOME_STATUS"
-    [[ -n "${HOME_IP:-}" ]] || show_home_diagnostics
+    [[ -n "${HOME_IP:-}" ]] || quiet show_home_diagnostics
   fi
   rm -f "$DISCOVERY_TOOL"
   exit 0
@@ -213,11 +213,10 @@ fi
 STAGE='安装基础环境'
 note "$STAGE"
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -q
-apt-get install -y ca-certificates curl python3 openssl iproute2 iptables openvpn cron
+quiet apt-get update -q
+quiet apt-get install -y ca-certificates curl python3 openssl iproute2 iptables openvpn cron
 
 STAGE='确认节点参数'
-note '自动模式使用随机空闲端口；手动模式只询问缺少的项目。'
 USED_PORTS=()
 PANEL_PORT=''; SOCKS_PORT=''; REALITY_PORT=''; HY2_PORT=''; HOME_PORT=''
 COUNTRY='US'
@@ -232,7 +231,7 @@ PY
     PANEL_PORT="${SAVED[0]}"; SOCKS_PORT="${SAVED[1]}"; COUNTRY="${SAVED[2]}"
     PANEL_USER="${SAVED[3]}"; PANEL_PASS="${SAVED[4]}"
     SOCKS_USER="${SAVED[5]}"; SOCKS_PASS="${SAVED[6]}"
-    printf '沿用本机已保存的面板账号及端口。\n'
+    printf '沿用本机已保存的面板账号及端口。\n' >>"$IP_INSTALL_LOG"
   else
     ask_port PANEL_PORT '住宅管理面板 HTTPS' tcp
     ask_port SOCKS_PORT '住宅代理内部端口' tcp
@@ -318,8 +317,8 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 UNIT
-systemctl daemon-reload
-systemctl enable --now residential-panel.service
+quiet systemctl daemon-reload
+quiet systemctl enable --now residential-panel.service
 PANEL_READY=0
 for _ in {1..10}; do
   if curl -ksSf --max-time 3 -u "$PANEL_USER:$PANEL_PASS" "https://127.0.0.1:$PANEL_PORT/api/config" >/dev/null 2>&1; then
@@ -329,7 +328,7 @@ for _ in {1..10}; do
   sleep 1
 done
 [[ "$PANEL_READY" == 1 ]] || die '独立住宅面板 API 验证失败；请查看 residential-panel.service 日志。'
-systemctl enable --now residential-agent.service
+quiet systemctl enable --now residential-agent.service
 for _ in {1..20}; do
   port_free "$SOCKS_PORT" tcp || break
   sleep 1
@@ -345,7 +344,7 @@ if [[ ! -x "$SING_BOX" ]]; then
   case "$(uname -m)" in x86_64) SB_ARCH=amd64 ;; aarch64) SB_ARCH=arm64 ;; esac
   ARCHIVE="$(mktemp)"
   RELEASE="https://github.com/SagerNet/sing-box/releases/download/v1.14.1/sing-box-1.14.1-linux-${SB_ARCH}.tar.gz"
-  if curl -fL --retry 3 --connect-timeout 15 --max-time 120 "$RELEASE" -o "$ARCHIVE"; then
+  if quiet curl -fL --retry 3 --connect-timeout 15 --max-time 120 "$RELEASE" -o "$ARCHIVE"; then
     if python3 - "$ARCHIVE" "$SB_ARCH" <<'PY'
 import hashlib,json,pathlib,sys,urllib.request
 try:
@@ -463,9 +462,9 @@ LimitNOFILE=65535
 [Install]
 WantedBy=multi-user.target
 UNIT
-systemctl daemon-reload
-systemctl enable three-nodes.service >/dev/null
-systemctl restart three-nodes.service
+quiet systemctl daemon-reload
+quiet systemctl enable three-nodes.service
+quiet systemctl restart three-nodes.service
 sleep 2
 [[ "$(systemctl is-active three-nodes.service)" == active ]] || die '补建节点服务没有启动。'
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q 'Status: active'; then
@@ -548,13 +547,13 @@ PANEL_FINGERPRINT='现有面板'
 if [[ -z "$EXIST_TCP" ]]; then
   NODE_REALITY="vless://${REALITY_UUID}@${PUBLIC_IP}:${REALITY_PORT}?encryption=none&security=reality&sni=${SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp&flow=xtls-rprx-vision#VLESS-Reality-TCP"
   port_free "$REALITY_PORT" tcp && die '新建 VLESS Reality TCP 端口没有监听。'
-  smoke_node reality
+  quiet smoke_node reality
   DIRECT_STATUS='新建节点本机握手及出口测试通过；公网端口需从外部验证'
 fi
 if [[ -z "$EXIST_UDP" && "$IP_DISABLE_UDP" != 1 ]]; then
   NODE_HY2="hysteria2://${HY2_PASS}@${PUBLIC_IP}:${HY2_PORT}/?sni=${SNI}&insecure=1&pinSHA256=${HY2_PIN}#Hysteria2-UDP"
   port_free "$HY2_PORT" udp && die '新建 Hysteria2 UDP 端口没有监听。'
-  smoke_node hy2
+  quiet smoke_node hy2
   HY2_STATUS='新建节点本机 UDP 握手及出口测试通过；云平台 UDP 放行需从外部验证'
 fi
 HOME_IP=''
@@ -573,7 +572,7 @@ if [[ -f "$STACK_DIR/settings.json" && -f "$STACK_DIR/auth.json" ]]; then
   upgrade_panel "$NODE_REALITY" "$NODE_HY2" "$NODE_HOME"
   refresh_home_status
   if [[ "$NEED_STACK" == 1 && -n "$HOME_IP" ]]; then
-    if ! smoke_node home; then
+    if ! quiet smoke_node home; then
       HOME_STATUS="上游出口 $HOME_IP 已连通，但家宽节点入口握手检测未通过，请查看上方错误"
     fi
   fi
@@ -610,6 +609,6 @@ printf '\n新建的公网端口需在云平台放行：'
 [[ -z "$HY2_PORT" ]] || printf ' UDP %s' "$HY2_PORT"
 printf '\n'
 if [[ -f "$STACK_DIR/settings.json" && -z "$HOME_IP" ]]; then
-  show_home_diagnostics
+  quiet show_home_diagnostics
 fi
 rm -f "$DISCOVERY_TOOL"
