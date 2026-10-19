@@ -306,6 +306,15 @@ class NetworkTests(unittest.TestCase):
             text=n.concise_result({'mode':'direct'},{'public_ip':'192.0.2.10','panel_port':30443},{'username':'u','password':'p'},{},{},{},[],[],True,[])
         self.assertIn('证书运行环境下载失败',text);self.assertNotIn('请开放TCP端口 80',text)
 
+    def test_default_alias_update_changes_only_fragment(self):
+        for old,new in [('VLESS-Reality-TCP','TCP直连'),('Hysteria2-UDP','UDP直连'),('Residential-Exit','中转家宽')]:
+            link='vless://credential@192.0.2.10:31001/?security=reality&sni=www.amazon.com#'+old
+            renamed=n.update_alias(link)
+            self.assertEqual(renamed.split('#')[0],link.split('#')[0])
+            self.assertEqual(n.urllib.parse.unquote(renamed.split('#')[1]),new)
+        alternative='trojan://credential@host.example:443#Trojan-WS-TLS-TCP-alternative'
+        self.assertEqual(n.update_alias(alternative),alternative)
+
     def test_unmapped_summary_keeps_native_links_and_one_action_list(self):
         state={'mode':'mapped','udp_available':False,'mappings':{}}
         settings={'public_ip':'192.0.2.10','panel_port':21479,'proxy_port':53583}

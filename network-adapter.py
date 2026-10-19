@@ -291,6 +291,13 @@ def mapped_link(link, address, port):
     return urllib.parse.urlunsplit((u.scheme, u.netloc.rsplit('@', 1)[0] + '@' + address + ':' + str(port), u.path, u.query, u.fragment))
 
 
+def update_alias(link):
+    if not link: return link
+    base, separator, fragment = link.partition('#')
+    alias = {'VLESS-Reality-TCP':'TCP直连', 'Hysteria2-UDP':'UDP直连', 'Residential-Exit':'中转家宽'}.get(urllib.parse.unquote(fragment))
+    return base + '#' + urllib.parse.quote(alias) if alias else link
+
+
 def load_verifier():
     spec = importlib.util.spec_from_file_location('ip_verifier', ROOT / 'verify-node.py')
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -699,7 +706,7 @@ def auto_air_mappings(state, links, settings):
 
 def apply():
     state, settings, auth = read(ROOT / 'network.json'), read(ROOT / 'settings.json'), read(ROOT / 'auth.json')
-    links = read(ROOT / 'native-links.json', read(ROOT / 'links.json'))
+    links = {role: update_alias(uri) for role, uri in read(ROOT / 'native-links.json', read(ROOT / 'links.json')).items()}
     if not settings or not auth: raise ValueError('独立住宅面板未部署完成，无法继续网络适配')
     binary = settings.get('sing_box_bin', str(BIN / 'sing-box'))
     if not pathlib.Path(binary).is_file(): raise ValueError('没有找到节点程序')

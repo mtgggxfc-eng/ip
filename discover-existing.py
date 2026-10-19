@@ -174,15 +174,15 @@ def discover():
         for inbound in config.get('inbounds', []):
             if inbound.get('type') == 'vless' and (inbound.get('tls') or {}).get('reality', {}).get('enabled'):
                 if is_home(inbound, config):
-                    link = link_for_reality(inbound, ip, 'Residential-Exit')
+                    link = link_for_reality(inbound, ip, '中转家宽')
                     result['home'] = result['home'] or link
                     if managed: result['managed_home'] = link
                 else:
-                    link = link_for_reality(inbound, ip, 'VLESS-Reality-TCP')
+                    link = link_for_reality(inbound, ip, 'TCP直连')
                     result['tcp'] = result['tcp'] or link
                     if managed: result['managed_tcp'] = link
             elif inbound.get('type') == 'hysteria2':
-                link = link_for_hy2(inbound, ip, 'Hysteria2-UDP')
+                link = link_for_hy2(inbound, ip, 'UDP直连')
                 if not result['udp'] and link:
                     result['udp_cert'] = (inbound.get('tls') or {}).get('certificate_path', '')
                 result['udp'] = result['udp'] or link

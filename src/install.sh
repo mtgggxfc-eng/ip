@@ -554,20 +554,20 @@ if [[ "$NEED_STACK" == 0 ]]; then
 fi
 PANEL_FINGERPRINT='现有面板'
 if [[ -z "$EXIST_TCP" ]]; then
-  NODE_REALITY="vless://${REALITY_UUID}@${PUBLIC_IP}:${REALITY_PORT}?encryption=none&security=reality&sni=${SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp&flow=xtls-rprx-vision#VLESS-Reality-TCP"
+  NODE_REALITY="vless://${REALITY_UUID}@${PUBLIC_IP}:${REALITY_PORT}?encryption=none&security=reality&sni=${SNI}&fp=chrome&pbk=${REALITY_PUBLIC}&sid=${REALITY_SID}&type=tcp&flow=xtls-rprx-vision#TCP%E7%9B%B4%E8%BF%9E"
   port_free "$REALITY_PORT" tcp && die '新建 VLESS Reality TCP 端口没有监听。'
   if quiet smoke_node reality; then DIRECT_STATUS='新建节点本机握手及出口测试通过；公网端口需从外部验证'
   else DIRECT_STATUS='节点已生成，本机检测未通过；请查看安装日志'; fi
 fi
 if [[ -z "$EXIST_UDP" && "$IP_DISABLE_UDP" != 1 ]]; then
-  NODE_HY2="hysteria2://${HY2_PASS}@${PUBLIC_IP}:${HY2_PORT}/?sni=${SNI}&insecure=1&pinSHA256=${HY2_PIN}#Hysteria2-UDP"
+  NODE_HY2="hysteria2://${HY2_PASS}@${PUBLIC_IP}:${HY2_PORT}/?sni=${SNI}&insecure=1&pinSHA256=${HY2_PIN}#UDP%E7%9B%B4%E8%BF%9E"
   port_free "$HY2_PORT" udp && die '新建 Hysteria2 UDP 端口没有监听。'
   if quiet smoke_node hy2; then HY2_STATUS='新建节点本机 UDP 握手及出口测试通过；云平台 UDP 放行需从外部验证'
   else HY2_STATUS='Hysteria2 已生成，本机检测未通过；请查看安装日志'; fi
 fi
 HOME_IP=''
 if [[ "$NEED_STACK" == 1 ]]; then
-  NODE_HOME="vless://${HOME_UUID}@${PUBLIC_IP}:${HOME_PORT}?encryption=none&security=reality&sni=${SNI}&fp=chrome&pbk=${HOME_PUBLIC}&sid=${HOME_SID}&type=tcp&flow=xtls-rprx-vision#Residential-Exit"
+  NODE_HOME="vless://${HOME_UUID}@${PUBLIC_IP}:${HOME_PORT}?encryption=none&security=reality&sni=${SNI}&fp=chrome&pbk=${HOME_PUBLIC}&sid=${HOME_SID}&type=tcp&flow=xtls-rprx-vision#%E4%B8%AD%E8%BD%AC%E5%AE%B6%E5%AE%BD"
   PANEL_URL="https://$PUBLIC_IP:$PANEL_PORT/"
   PANEL_FINGERPRINT="$(openssl x509 -in "$STACK_DIR/panel-cert.pem" -noout -fingerprint -sha256 | cut -d= -f2)"
   port_free "$HOME_PORT" tcp && die '新建家宽入口 TCP 端口没有监听。'

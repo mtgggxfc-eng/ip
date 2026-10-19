@@ -32,6 +32,8 @@ curl -fsSL https://raw.githubusercontent.com/mtgggxfc-eng/ip/main/jkyj.sh | { if
 
 每次运行自动检查并补全缺失环境；系统 Python 较旧时，为证书组件准备独立 Python，不替换系统 Python。Ubuntu 20.04/Python 3.8 已实际签发并加载正式 IP 证书。环境范围、限制及维护见 [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)。
 
+原生节点导入后的默认别名：TCP直连、UDP直连、中转家宽。重跑会更新链接中的旧默认别名，连接参数保持不变；TCP 替代入口仍按真实协议标注。
+
 ## 面板与自动化
 
 - 普通 VPS 优先申请公网 IP 证书；没有公网 80 的映射机器优先使用独立 CF 隧道。
