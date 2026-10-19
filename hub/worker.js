@@ -114,12 +114,30 @@ function renderPage(origin, env) {
     let page = PANEL.replace('同步到所有已纳管 VPS', '只同步到当前所选 VPS').replace('保存并全局下发', '保存到所选机器');
     for (const [key, value] of Object.entries(fields)) page = page.split(key).join(escape(value));
     const selector = '<div class="mt-4 flex flex-wrap items-center gap-3"><label for="machine-picker" class="text-cyan-300 text-sm">管理机器</label><select id="machine-picker" disabled class="bg-slate-800 border border-slate-600 text-white rounded px-3 py-2"><option>正在读取机器列表…</option></select><button id="add-machine" class="bg-cyan-700 text-white rounded px-3 py-2 text-sm">新增机器</button><span id="machine-state" class="text-sm text-slate-400"></span></div><dialog id="install-dialog" class="bg-slate-900 text-white rounded-xl p-6 border border-slate-600 max-w-3xl w-full"><h2 class="text-xl mb-3">私人安装命令</h2><p class="text-sm text-slate-300 mb-3">只在你自己的 VPS 执行。授权 15 分钟内有效，仅限一台机器。运行后按回车自动安装；完成后刷新本页即可选择该机器。</p><textarea id="install-command" readonly rows="8" class="w-full bg-slate-800 text-cyan-200 rounded p-3 text-sm"></textarea><p id="install-message" class="text-sm text-slate-300 my-3"></p><button id="copy-install" class="bg-cyan-700 rounded px-4 py-2">复制命令</button><button id="close-install" class="ml-3 border border-slate-600 rounded px-4 py-2">关闭</button></dialog>';
-    page = page.replace('</h1>', '</h1>' + selector);
+    const removal = '<button id="remove-machine" disabled class="border border-red-700 text-red-300 rounded px-3 py-2 text-sm disabled:opacity-40" title="删除当前选择的独立机器及其专属云资源">删除所选机器</button>';
+    page = page.replace('</h1>', '</h1>' + selector.replace('<span id="machine-state"', removal + '<span id="machine-state"'));
     // Install before the original page's polling starts. The existing page and controls stay intact.
     const script = `<script>
     (() => {
       const originalFetch=window.fetch.bind(window), pending=new Set();
-      let selected='', writes=0, configReady=false;
+      let selected='', writes=0, configReady=false, deleting=false;
+      const removeButton=document.getElementById('remove-machine');
+      const updateRemoval=()=>{removeButton.disabled=!selected||selected==='legacy'||!!writes||deleting;
+        removeButton.title=selected==='legacy'?'原有住宅面板是兼容分组，不能用此按钮整组删除':'删除当前选择的独立机器及其专属云资源';};
+      removeButton.addEventListener('click',async()=>{
+        if(!selected||selected==='legacy'||writes||deleting)return;
+        const picker=document.getElementById('machine-picker'),target=selected,label=picker.selectedOptions[0]?.textContent||target;
+        if(!confirm('确认删除机器「'+label+'」？将移出汇总列表、撤销该机授权，并清理项目为它创建的专属 CF 隧道和 DNS。依赖这些资源的节点及面板会断开。此操作不会卸载 VPS 上的程序，也不会删除其他机器。'))return;
+        deleting=true;picker.disabled=true;updateRemoval();for(const c of pending)c.abort();pending.clear();loading();
+        document.getElementById('machine-state').textContent='正在撤销授权并清理所选机器资源…';
+        try{const r=await originalFetch('/api/machines/'+encodeURIComponent(target),{method:'DELETE',headers:{'X-Panel-Action':'1'}});
+          const data=await r.json();if(!r.ok||!data.ok)throw Error(data.error||'删除未完成');
+          if(localStorage.getItem('ip-machine')===target)localStorage.removeItem('ip-machine');
+          selected='';location.reload();
+        }catch{document.getElementById('config-form').textContent='删除尚未完成，机器授权可能已撤销，部分云资源可能已清理。请再次点击删除重试清理。';
+          document.getElementById('machine-state').textContent='删除未完成，请重试；不要把列表仍有记录当作授权仍有效。';}
+        finally{deleting=false;picker.disabled=!selected||!!writes;updateRemoval()}
+      });
       document.getElementById('add-machine').addEventListener('click',async()=>{
         const label=prompt('给新机器起个名称（例如：美国新机）');if(!label?.trim())return;
         const button=document.getElementById('add-machine');button.disabled=true;
@@ -141,27 +159,27 @@ function renderPage(origin, env) {
         const picker=document.getElementById('machine-picker');picker.replaceChildren();
         for(const m of items){const option=document.createElement('option');option.value=m.id;option.textContent=m.label;picker.append(option)}
         const previous=localStorage.getItem('ip-machine');selected=items.some(m=>m.id===previous)?previous:(items[0]?.id||'');
-        picker.value=selected;picker.disabled=!selected;updateProxyLinks();if(selected)loading();
+        picker.value=selected;picker.disabled=!selected;updateProxyLinks();updateRemoval();if(selected)loading();
         document.getElementById('machine-state').textContent=selected?'修改仅作用于所选机器':'暂无机器，请先在管理接口创建一次性接入码';
-        picker.addEventListener('change',()=>{if(writes)return;for(const c of pending)c.abort();pending.clear();selected=picker.value;localStorage.setItem('ip-machine',selected);updateProxyLinks();loading();
+        picker.addEventListener('change',()=>{if(writes||deleting)return;for(const c of pending)c.abort();pending.clear();selected=picker.value;localStorage.setItem('ip-machine',selected);updateProxyLinks();updateRemoval();loading();
           if(typeof loadConfig==='function')loadConfig();if(typeof fetchNodes==='function')fetchNodes();if(typeof fetchCountries==='function')fetchCountries();});
       }).catch(()=>{document.getElementById('machine-state').textContent='列表读取失败，请重新登录或刷新页面';});
       window.fetch=async(input,init={})=>{
         const url=new URL(typeof input==='string'?input:input.url,location.href);
         if(url.origin!==location.origin||!url.pathname.startsWith('/api/'))return originalFetch(input,init);
-        await ready;if(!selected)throw Error('请先接入一台机器');
+        await ready;if(!selected)throw Error('请先接入一台机器');if(deleting)throw Error('正在删除所选机器，请稍候');
         const target=selected,headers=new Headers(init.headers||(input instanceof Request?input.headers:undefined));headers.set('X-IP-Machine',target);
         const method=(init.method||(input instanceof Request?input.method:'GET')).toUpperCase(),isWrite=method!=='GET';
         const controller=new AbortController(),picker=document.getElementById('machine-picker');
         if(isWrite&&!configReady)throw Error('所选机器配置尚未加载，不能保存');
-        if(isWrite){writes++;picker.disabled=true}else pending.add(controller);
+        if(isWrite){writes++;picker.disabled=true;updateRemoval()}else pending.add(controller);
         try{const response=await originalFetch(input,{...init,headers,signal:controller.signal});
           if(method==='GET'&&url.pathname==='/api/config'&&target===selected){
             if(response.ok&&(await response.clone().json()).slot_map){configReady=true;document.querySelector('button[onclick="saveConfig()"]').disabled=false;
               document.getElementById('machine-state').textContent='修改仅作用于所选机器';}
             else{loading();document.getElementById('config-form').textContent='无法读取所选机器配置，请检查连接';throw Error('所选机器配置读取失败');}}
           return response;}
-        finally{pending.delete(controller);if(isWrite){writes--;picker.disabled=!!writes}}
+        finally{pending.delete(controller);if(isWrite){writes--;picker.disabled=!!writes;updateRemoval()}}
       };
     })();</script>`;
     page = page.replace('<script>', script + '<script>');

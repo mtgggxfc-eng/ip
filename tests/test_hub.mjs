@@ -55,6 +55,7 @@ const list=await(await handle(request('/api/machines'),env)).text();
 assert(!list.includes(panelPassword));assert(!list.includes('panel_origin'));assert(!list.includes('token_hash'));
 const page=await(await handle(request('/'),env)).text();
 assert(page.includes('machine-picker'));assert(!page.includes(panelPassword));assert(!page.includes(env.ADMIN_PASSWORD));assert(!page.includes(env.CREDENTIAL_KEY));
+assert(page.includes('id="remove-machine"'));assert(page.includes('依赖这些资源的节点及面板会断开'));
 if(process.argv[2])await writeFile(process.argv[2],page);
 assert.equal((await handle(request('/api/machines','GET','Bearer '+registration.machine_token),env)).status,401);
 assert.equal((await handle(request('/api/config'),env)).status,400);
@@ -79,6 +80,10 @@ globalThis.fetch=async()=>new Response('',{status:302,headers:{Location:'http://
 assert.equal((await handle(request('/api/config','GET',admin,undefined,{'X-IP-Machine':registration.machine_id}),env)).status,502);
 const bad=await enroll('无效地址');
 await assert.rejects(handle(request('/api/register','POST','Bearer '+bad.code,{...payload,panel_origin:'http://127.0.0.1/'}),env));
+assert.equal((await handle(request('/api/machines/legacy','DELETE'),env)).status,400);
+assert.equal((await handle(request('/api/machines/'+registration.machine_id,'DELETE',''),env)).status,401);
+assert.equal((await handle(request('/api/machines/'+registration.machine_id,'DELETE',admin,undefined,{'X-Panel-Action':''}),env)).status,403);
+assert.equal(machines.has(registration.machine_id),true);
 await handle(request('/api/machines/'+registration.machine_id,'DELETE'),env);
 assert.equal((await handle(request('/api/machine','POST','Bearer '+registration.machine_token,payload),env)).status,403);
 assert.equal(machines.has(reg2.machine_id),true);
