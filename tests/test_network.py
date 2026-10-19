@@ -267,18 +267,29 @@ class NetworkTests(unittest.TestCase):
         self.assertIn(['tcp',80],n.read(self.root/'firewall-ports.json'))
         summary=(self.root/'three-nodes-info.txt').read_text(encoding='utf-8')
         self.assertIn('https://192.0.2.10:30443/',summary)
-        self.assertIn('已生成，公网检测未通过',summary)
+        self.assertIn('已生成，本机协议或出口检测未通过',summary)
         self.assertNotIn('请开放TCP端口 80',summary)
         self.assertNotIn('住宅代理内部端口',summary)
         detail=(self.root/'deployment-details.txt').read_text(encoding='utf-8')
         self.assertIn('住宅代理内部端口 30101',detail)
         self.assertEqual(n.read(self.root/'network-report.json')['ready_roles'],[])
 
-    def test_working_native_ports_do_not_request_reopening(self):
+    def test_self_success_cannot_hide_cloud_port_reminders(self):
         native={'tcp':'vless://direct@192.0.2.10:31001','udp':'hysteria2://test@192.0.2.10:31002','home':'vless://home@192.0.2.10:31003'}
+        report=[{'protocol':proto,'internal_port':port,'host_opened':True,'public_reachable':True,'public_scope':'vps-public-endpoint'} for proto,port in [('tcp',31001),('udp',31002),('tcp',31003),('tcp',30443)]]
         with patch.dict(os.environ,{},clear=True):
-            text=n.concise_result({'mode':'direct','udp_available':True},{'public_ip':'192.0.2.10','panel_port':30443},{'username':'u','password':'p'},native,native,native,['https://192.0.2.10:30443/'],[],True,[])
-        self.assertNotIn('请在后台开放端口',text);self.assertNotIn('请开放',text)
+            text=n.concise_result({'mode':'direct','udp_available':True},{'public_ip':'192.0.2.10','panel_port':30443},{'username':'u','password':'p'},native,native,native,['https://192.0.2.10:30443/'],[],True,report)
+        self.assertIn('请在后台开放端口',text);self.assertIn('尚待外部确认',text)
+        self.assertNotIn('无需重复开放端口',text)
+        for port in (31001,31002,31003,30443): self.assertIn('端口 '+str(port),text)
+
+    def test_only_external_evidence_can_hide_direct_port_reminders(self):
+        native={'tcp':'vless://direct@192.0.2.10:31001','udp':'hysteria2://test@192.0.2.10:31002','home':'vless://home@192.0.2.10:31003'}
+        report=[{'protocol':proto,'internal_port':port,'host_opened':True,'public_reachable':True,'public_scope':'external','external_verified':True} for proto,port in [('tcp',31001),('udp',31002),('tcp',31003),('tcp',30443)]]
+        with patch.dict(os.environ,{},clear=True):
+            text=n.concise_result({'mode':'direct','udp_available':True},{'public_ip':'192.0.2.10','panel_port':30443},{'username':'u','password':'p'},native,native,native,['https://192.0.2.10:30443/'],[],True,report)
+        self.assertNotIn('请在后台开放端口',text)
+        self.assertIn('已由外部检测确认',text)
 
     def test_open_home_port_with_failed_upstream_is_not_reported_closed(self):
         native={'tcp':'vless://direct@192.0.2.10:31001','udp':'hysteria2://test@192.0.2.10:31002','home':'vless://home@192.0.2.10:31003'}
@@ -286,19 +297,23 @@ class NetworkTests(unittest.TestCase):
         report=[{'protocol':'tcp','internal_port':31003,'host_opened':True}]
         with patch.object(n.socket,'create_connection') as connect:
             n.probe_public_ports(state,settings,native,{'tcp':True,'udp':True,'home':False},['https://192.0.2.10:30443/'],report)
-        connect.assert_called_once();self.assertTrue(report[0]['public_reachable'])
+        connect.assert_called_once();self.assertTrue(report[0]['self_reachable'])
+        self.assertIsNone(report[0]['public_reachable']);self.assertFalse(report[0]['external_verified'])
         with patch.dict(os.environ,{},clear=True):
             text=n.concise_result(state,settings,{'username':'u','password':'p'},native,native,{k:v for k,v in native.items() if k!='home'},['https://192.0.2.10:30443/'],[],True,report)
         self.assertNotIn('请开放TCP端口 31003',text)
-        self.assertIn('公网检测未通过（住宅IP节点）',text)
-        self.assertIn('无需重复开放该端口',text)
+        self.assertIn('本机协议或出口检测未通过（住宅IP节点）',text)
+        self.assertIn('不能证明公网已放行',text)
+        self.assertIn('请核对TCP端口 31003',text)
 
     def test_unknown_mapping_is_not_probed_using_egress_ip(self):
         native={'tcp':'vless://direct@192.0.2.10:31001'}
-        report=[{'protocol':'tcp','internal_port':31001,'host_opened':True}]
+        n.write(self.root/'certificate-status.json',{'stage':'applied','ok':True})
+        report=[{'protocol':'tcp','internal_port':31001,'host_opened':True},{'protocol':'tcp','internal_port':80,'host_opened':True}]
         with patch.object(n.socket,'create_connection') as connect:
             n.probe_public_ports({'mode':'mapped','mappings':{}},{'public_ip':'192.0.2.10','panel_port':30443},native,{},[],report)
         connect.assert_not_called();self.assertIsNone(report[0]['public_reachable'])
+        self.assertIsNone(report[1]['public_reachable']);self.assertFalse(report[1]['external_verified'])
 
     def test_runtime_failure_reports_real_reason_without_blame_on_port80(self):
         n.write(self.root/'certificate-status.json',{'stage':'runtime','ok':False,'reason':'证书运行环境下载失败'})
@@ -335,7 +350,7 @@ class NetworkTests(unittest.TestCase):
         self.assertEqual(text.rstrip().splitlines()[-1],'╚════════════════════════════════════════════╝')
         self.assertIn(native['tcp'],text.splitlines());self.assertIn(native['home'],text.splitlines())
         self.assertNotIn('下一步：在平台后台创建以下端口映射：',text)
-        self.assertIn('请开放TCP端口 21479（管理面板）',text)
+        self.assertIn('请核对TCP端口 21479（管理面板）',text)
         self.assertIn('当前环境不支持UDP节点。',text)
         self.assertIn('已生成两条TCP节点',text)
         self.assertGreater(text.index('当前环境不支持UDP节点。'),text.index(headers[2]))
@@ -432,7 +447,7 @@ sudo() { printf 'sudo-ran'; return 7; }
              patch.object(n,'load_verifier',return_value=verifier),patch.object(n,'panel_check',return_value=True), \
              patch.object(n,'private_tunnel_setup',return_value=(hosts,{r:'fallback-'+r for r in links})) as provision, \
              patch.object(n,'register_hub',return_value='https://hub.example.com') as register:
-            self.assertEqual(n.apply(),0)
+            self.assertEqual(n.apply(),2)
             provision.assert_called_once()
             self.assertEqual(register.call_args.args[0],'https://panel.example.com/')
         self.assertEqual(n.read(self.root/'links.json'),links)

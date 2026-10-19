@@ -64,9 +64,11 @@ HTTP-01 只能验证公网 80；内部 80 映射到公网随机端口不满足�
 
 本机命令成功不等于云端已经放行；nftables 特殊链、云安全组、多层防火墙仍可能拦截。公开入口实测是另一项证据。
 
-执行顺序固定为可选云 API 建立/复用映射、本机指定端口放行、实际协议和公开端口检测。已经验证通过的节点/面板端口不再提示开放；TCP 可建立连接但住宅上游失败时，不提示重复开放该 TCP 端口。UDP 必须通过 Hysteria2 实际测试，不能用 TCP 探测证明 UDP。随机映射未知时不把出口 IP 当作入站探测目标，显示需要后台确认的项目。CF 备用直连也按检查结果过滤，已通的不列。
+执行顺序固定为可选云 API 建立/复用映射、本机指定端口放行、实际协议和本机连接测试。本机访问自身公网 IP 可能通过本机/内网绕回而绕过云防火墙；即使 VLESS/Hysteria2 都通过，也不能证明外部入站开放。当前公共工具没有独立外测服务，因此直连端口保留待确认提示，不说已经开放或确定关闭。UDP 不能用 TCP 探测证明，随机映射未知时也不猜入站地址。
 
-network-report.json 的 ports[].public_reachable 为 true/false/null，分别表示本机访问已知公网入口成功/失败/地址未知或尚无法验证；public_scope 记录检测范围。这是 VPS 发起的自测，不等于用户网络验收，也不等于已读取云安全组配置。80 在成功申请后可能没有常驻监听，不能因为 Certbot 已退出就误报端口未放行。
+network-report.json 的 ports[].self_reachable 为 true/false/null，分别表示本机连接成功/失败/无法测试；本机探测始终把 public_reachable 留 null、external_verified=false、public_scope=not-externally-verified。只有真实独立外测结果才能使用 external_verified=true、public_scope=external 及 public_reachable=true 隐藏对应提醒；目前没有提供这类外测服务，不能手填测试数据冒充已实现。旧版本 public_reachable=true/public_scope=vps-public-endpoint 不再视为外部证据。旧证书也不证明当前 80 开放。
+
+direct_ingress_pending 记录正在使用的直连入口是否仍缺外部确认。即使三个入口本机协议自测成功，只要直连入站未外测，摘要仍显示待确认、退出码为 2。CF 隧道不依赖本机公网入站，当前使用的 CF 入口不要求开放原生端口；其备用直连仍是待核对项。links.json/ready_roles 继续记录本机协议自测结果，不能解释成外部验收清单。
 
 NVIDIA 是可选的平台适配器，不是通用流程的前提。配置 API Bearer 授权后，可按默认网卡 MAC 唯一匹配接口，也可显式指定 interface UUID；匹配不唯一就停止平台写入。每次重跑查询当前映射，复用已有同接口同内部端口的服务，不修改它；只记录和清理自己新建的服务。没有 UDP 字段，不自动创建所谓 UDP Other 服务。没有配置此适配器的授权时，不向它请求或询问该平台专属参数。
 
@@ -121,7 +123,7 @@ verify-node.py 为每个候选启动临时 sing-box，只监听 loopback。经�
 
 公开 WS 使用正常 CA 验证。自签 HY2 必须提供证书并与链接 pinSHA256 完全匹配，再把该证书交给测试客户端信任；不会在验证器里静默忽略认证。原分享 URI 的 pinSHA256 是否被具体 v2rayN 核心执行，仍需客户端版本验收。
 
-退出码：0 表示三个入口及面板均通过 VPS 发起的公开自测；2 表示部分项目未通过。不是带宽评分，也不是用户所在网络的验收。客户端可另外执行 verify-node.py --links 文件 --binary 核心路径 --scope client-test；不要上传含凭据的链接文件。
+退出码：0 表示三个入口及面板均通过本机自测且无待外部确认的活动直连入口；2 表示部分未通过或直连入站尚未确认。不是带宽评分，也不是用户所在网络的验收。客户端可另外执行 verify-node.py --links 文件 --binary 核心路径 --scope client-test；不要上传含凭据的链接文件。
 
 2026-10-19 起：/root/three-nodes-links.txt 是已生成链接的复制区，包括公网检测失败、等待端口开放的入口；/etc/residential-stack/links.json 继续只保存已通过验证的入口。network-report.json 的 generated_roles 与 ready_roles 分别记录生成和就绪，pending_panel_urls 记录未通过验证的面板候选。
 
@@ -131,7 +133,7 @@ verify-node.py 为每个候选启动临时 sing-box，只监听 loopback。经�
 
 终端与 /root/three-nodes-info.txt 使用 concise_result()，只显示生成数/状态、链接复制区、面板地址或模板、登录信息及下一步。节点原始链接通过 generated_exports() 的 native_links 回退输出；即使映射未知也保留配置，必须明确提示替换地址/端口，不能升级 ready_roles 或写入已验证 links.json。
 
-需要手动开放/映射的端口只列一次；已检测通过的端口不列，包括备用直连。CF 备用项只列检测失败或尚缺映射的端口。完整说明保存 /etc/residential-stack/deployment-details.txt；安装器另创建本次 /root/ip-install.XXXXXX.log，使用 umask 077，通过 IP_INSTALL_LOG 传给子进程。
+需要核对开放/映射的端口只列一次。只有外部确认才能隐藏，不以本机连接成功为依据；提示明确“尚未从 VPS 外部确认，已开放无需重复操作”。CF 备用直连同样适用。完整说明保存 /etc/residential-stack/deployment-details.txt；安装器另创建本次 /root/ip-install.XXXXXX.log，使用 umask 077，通过 IP_INSTALL_LOG 传给子进程。
 
 quiet() 将更新器和本机握手细节写入日志，保留退出码；live() 使用 tee 实时显示基础组件安装、节点下载和面板/代理服务启动过程，并同时记日志，依赖 pipefail 保留失败状态。不要全局重定向：初始菜单及手动参数提示必须可见。所有过程信息出现在三个结果框前；第三框后不追加信息。安装日志在卸载后保留，便于排障；需由 root 自行清理。无已生成 UDP/替代入口时，操作区说明当前按不支持 UDP 处理，已有 TCP 直连与家宽中转两条节点；不再引导用户填写 CF 令牌。
 

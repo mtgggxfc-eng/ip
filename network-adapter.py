@@ -323,18 +323,18 @@ def generated_exports(candidates, selected, native_links=None):
 
 
 def probe_public_ports(state, settings, native, native_good, panels, port_report):
-    """Probe only this project's known public endpoints after firewall attempts.
+    """Locally probe project endpoints; never infer external firewall access.
 
     TCP connect distinguishes an open listener from an unhealthy home upstream.
     UDP requires its real protocol test. Unknown NAT addresses are never probed
     using the egress IP as if it were a confirmed inbound address.
     """
-    certificate = read(ROOT / 'certificate-status.json')
     for item in port_report:
         proto, inside = item['protocol'], item['internal_port']
         host, outside, reachable = '', None, None
         if inside == 80 and proto == 'tcp':
-            reachable = True if certificate.get('stage') == 'applied' and certificate.get('ok') else None
+            # A previously issued certificate cannot prove today's firewall.
+            reachable = None
         elif inside == settings['panel_port'] and proto == 'tcp':
             host = state.get('external_address') if state['mode'] == 'mapped' else settings['public_ip']
             outside = state.get('panel_external_port') if state['mode'] == 'mapped' else inside
@@ -354,9 +354,30 @@ def probe_public_ports(state, settings, native, native_good, panels, port_report
             except OSError: reachable = False
         if not host or not outside:
             if inside != 80: reachable = None
-        item['public_reachable'] = reachable
-        item['public_scope'] = 'vps-public-endpoint'
+        item['self_reachable'] = reachable
+        item['public_reachable'] = None
+        item['public_scope'] = 'not-externally-verified'
+        item['external_verified'] = False
     return port_report
+
+
+def port_externally_confirmed(port_report, proto, inside):
+    return any(p.get('protocol') == proto.lower() and p.get('internal_port') == inside and
+               p.get('external_verified') is True and p.get('public_scope') == 'external' and
+               p.get('public_reachable') is True for p in port_report)
+
+
+def direct_ingress_pending(state, settings, native, selected, panels, port_report):
+    for role, uri in selected.items():
+        base = native.get(role)
+        if not base: continue
+        mapped = mapped_link(base, state.get('external_address'), state.get('mappings', {}).get(role))
+        if uri in (base, mapped):
+            parsed = urllib.parse.urlsplit(base)
+            proto = 'udp' if parsed.scheme in ('hysteria2','hy2') else 'tcp'
+            if not port_externally_confirmed(port_report, proto, parsed.port): return True
+    cf_panels = {state.get(key, {}).get('panel') for key in ('private_hosts','tunnel_hosts')}
+    return any(urllib.parse.urlsplit(url).hostname not in cf_panels for url in panels) and not port_externally_confirmed(port_report, 'tcp', settings['panel_port'])
 
 
 def concise_result(state, settings, auth, native, exported, selected, panels, pending_panels, hub_ok, port_report):
@@ -365,7 +386,8 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
     names = {'tcp': 'TCP 直连节点', 'udp': 'Hysteria2 节点', 'home': '住宅IP节点'}
     count = sum(bool(exported.get(r)) for r in roles)
     ready = len(selected) == 3 and panels and hub_ok
-    lines = ['部署结果：' + ('三个节点检测通过。' if ready else '已生成 ' + str(count) + ' 个节点，仍有设置待完成。')]
+    pending_direct = direct_ingress_pending(state, settings, native, selected, panels, port_report)
+    lines = ['部署结果：' + ('本机自测通过，公网直连入站尚待外部确认。' if ready and pending_direct else '当前入口本机自测通过。' if ready else '已生成 ' + str(count) + ' 个节点，仍有设置待完成。')]
     raw_mapping = [r for r in roles if state['mode'] == 'mapped' and exported.get(r) and
                    r not in selected and exported[r] == native.get(r) and
                    not (state.get('external_address') and state.get('mappings', {}).get(r))]
@@ -373,9 +395,9 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
     if raw_mapping:
         lines.append('下方原始链接的地址和端口需改为平台分配的外部地址、外部端口。')
     waiting = [names[r] for r in roles if exported.get(r) and r not in selected]
-    if waiting: lines.append('状态：已生成，公网检测未通过（' + '、'.join(waiting) + '）。')
-    if native.get('home') and exported.get('home') and 'home' not in selected and any(p.get('protocol') == 'tcp' and p.get('internal_port') == urllib.parse.urlsplit(native['home']).port and p.get('public_reachable') is True for p in port_report):
-        lines.append('住宅 TCP 端口已可连接；节点握手或上游出口检测未通过，请查看详细日志，无需重复开放该端口。')
+    if waiting: lines.append('状态：已生成，本机协议或出口检测未通过（' + '、'.join(waiting) + '）。')
+    if native.get('home') and exported.get('home') and 'home' not in selected and any(p.get('protocol') == 'tcp' and p.get('internal_port') == urllib.parse.urlsplit(native['home']).port and p.get('self_reachable') is True for p in port_report):
+        lines.append('本机可连接住宅 TCP，但不能证明公网已放行；节点握手或出口失败原因见日志。')
     if not exported.get('udp') and state.get('udp_available'):
         lines.append('Hysteria2 节点未生成，请查看详细日志。')
     elif exported.get('udp', '').startswith('trojan://'):
@@ -402,27 +424,23 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
     cf_panels = {state.get(key, {}).get('panel') for key in ('private_hosts', 'tunnel_hosts')}
     panel_native = not panel or urllib.parse.urlsplit(panel).hostname not in cf_panels
     needed = []
-    def port_open(proto, inside, fallback=False):
-        entry = next((p for p in port_report if p.get('protocol') == proto.lower() and p.get('internal_port') == inside), {})
-        return entry.get('public_reachable', fallback) is True
+    def port_open(proto, inside):
+        return port_externally_confirmed(port_report, proto, inside)
     for r in native_roles:
         uri = urllib.parse.urlsplit(native[r])
         proto = 'UDP' if uri.scheme in ('hysteria2', 'hy2') else 'TCP'
-        if not port_open(proto, uri.port, r in selected): needed.append((proto, uri.port, names[r]))
-    if panel_native and not port_open('TCP', settings['panel_port'], bool(panels)):
+        if not port_open(proto, uri.port): needed.append((proto, uri.port, names[r]))
+    if panel_native and not port_open('TCP', settings['panel_port']):
         needed.append(('TCP', settings['panel_port'], '管理面板'))
     certificate = read(ROOT / 'certificate-status.json')
     if state['mode'] == 'direct' and certificate.get('stage') == 'issue' and not certificate.get('ok') and '无法访问公网 TCP 80' in certificate.get('reason','') and not port_open('TCP',80):
         needed.append(('TCP', 80, '证书验证连接失败，请核对平台及防火墙'))
     actions = []
     if needed:
-        if ready:
-            actions += ['复制节点导入客户端。', '【请在后台开放端口】重要！（外部连接失败时检查）']
-        else:
-            actions += ['【请在后台开放端口】重要！']
-        actions += ['请开放' + proto + '端口 ' + str(port) + '（' + name + '）' for proto, port, name in needed]
+        actions += ['【请在后台开放端口】重要！', '以下端口尚未从 VPS 外部确认，请在平台核对；已开放则无需重复操作。']
+        actions += ['请核对' + proto + '端口 ' + str(port) + '（' + name + '）' for proto, port, name in needed]
     elif ready:
-        actions += ['复制节点导入客户端；' + ('当前隧道入口无需新增公网入站映射。' if not panel_native else '当前入口检测通过，无需重复开放端口。')]
+        actions += ['复制节点导入客户端；' + ('当前隧道入口无需新增公网入站映射。' if not panel_native else '当前使用的直连端口已由外部检测确认。')]
     else:
         actions += ['请按上方检测原因处理未就绪项目，再重跑命令。']
     optional = []
@@ -447,7 +465,9 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
             hint = '（导入链接后，请替换真实端口）' if raw_mapping else ''
             actions += ['已生成两条TCP节点', '第一条：直连VLESS+reality' + hint, '第二条：中转家宽IP节点' + hint]
     log = os.environ.get('IP_INSTALL_LOG') or str(ROOT / 'deployment-details.txt')
-    if port_report: lines.append('端口检测范围：本机访问公网入口；入站可连接与住宅上游可用分别检测。')
+    if port_report or needed:
+        external_evidence = any(p.get('external_verified') is True and p.get('public_scope') == 'external' for p in port_report)
+        lines.append('检测范围：本机自测与外部验证结果分别记录。' if external_evidence else '检测范围：VPS 访问自身可能绕回本机，不能证明平台公网入站已开放；当前无独立外部检测服务。')
     lines += ['', '详细日志：' + log]
     # Decorations surround sections, never prefix URIs, so multi-line import
     # remains possible. All diagnostics precede the three final sections.
@@ -815,11 +835,12 @@ def apply():
             errors.append(safe_error(error))
     report['hub_registered'] = bool(state.get('hub_registered'))
     report['hub_requirement_met'] = hub_ok
+    report['direct_ingress_pending'] = direct_ingress_pending(state, settings, links, selected, panel_urls, port_report)
     write(ROOT / 'network-report.json', report)
     export = '\n'.join(exported[r] for r in ('tcp', 'udp', 'home') if exported[r])
     destination = pathlib.Path('/root/three-nodes-links.txt')
     destination.write_text(export + ('\n' if export else '')); destination.chmod(0o600)
-    lines = ['部署结果：' + ('三个入口公开自测通过' if len(selected) == 3 and panel_urls and hub_ok else '部分项目尚未通过'),
+    lines = ['部署结果：' + ('本机自测通过，公网直连入站尚待外部确认' if len(selected) == 3 and panel_urls and hub_ok and report['direct_ingress_pending'] else '三个入口本机自测通过' if len(selected) == 3 and panel_urls and hub_ok else '部分项目尚未通过'),
              '已生成的节点链接（可一起复制导入；未通过项需先放行端口或修复连接）：', '', export or '暂无可确认外部地址的链接；原生节点配置仍保存在本机，见下方映射或授权提示。', '',
              '检查范围：这台 VPS 访问公开入口；尚未代表你所在网络的 v2rayN 实测。']
     for role, title in [('tcp', '第一条'), ('udp', '第二条'), ('home', '住宅出口')]:
@@ -849,7 +870,7 @@ def apply():
     concise = concise_result(state, settings, auth, links, exported, selected, panel_urls, pending_panels, hub_ok, port_report)
     info = pathlib.Path('/root/three-nodes-info.txt'); info.write_text(concise, encoding='utf-8'); info.chmod(0o600)
     print('\n' + concise)
-    return 0 if len(selected) == 3 and panel_urls and hub_ok else 2
+    return 0 if len(selected) == 3 and panel_urls and hub_ok and not report['direct_ingress_pending'] else 2
 
 
 def safe_error(error):
