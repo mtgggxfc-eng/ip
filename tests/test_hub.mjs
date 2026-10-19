@@ -69,6 +69,31 @@ const proxied=await handle(request('/api/config','POST',admin,{country:'US'},{'X
 assert.equal(proxied.status,200);assert.equal(forwarded[0][0],'https://panel-one-new.example.com/api/config');
 assert.equal((await handle(request('/api/proxies?machine='+registration.machine_id),env)).status,200);
 assert.equal(forwarded[0][1].headers.get('Authorization'),'Basic '+Buffer.from('panel-admin:'+panelPassword).toString('base64'));
+// A working standalone direct URL is not proof that Worker fetch can use it.
+// Only a provisioned, same-machine panel tunnel may replace the management path.
+const managedMachine=machines.get(registration.machine_id);
+const managedHost='panel-'+registration.machine_id.slice(2)+'.example.com';
+managedMachine.resources=JSON.stringify({tunnel_id:'owned-tunnel',dns:{[managedHost]:{type:'CNAME',content:'owned-tunnel.cfargotunnel.com'}}});
+const tunnelEnv={...env,CF_ZONE_NAME:'example.com'};
+for(const method of ['GET','POST']) {
+  const count=forwarded.length;
+  assert.equal((await handle(request('/api/config',method,admin,method==='POST'?{country:'JP'}:undefined,{'X-IP-Machine':registration.machine_id}),tunnelEnv)).status,200);
+  assert.equal(forwarded.length,count+1,'writes must not be replayed');
+  assert.equal(forwarded.at(-1)[0],'https://'+managedHost+'/api/config');
+  assert.equal(forwarded.at(-1)[1].headers.get('Authorization'),forwarded[0][1].headers.get('Authorization'));
+}
+managedMachine.resources=JSON.stringify({tunnel_id:'owned-tunnel',dns:{[managedHost]:{type:'CNAME',content:'another-tunnel.cfargotunnel.com'}}});
+await handle(request('/api/config','GET',admin,undefined,{'X-IP-Machine':registration.machine_id}),tunnelEnv);
+assert.equal(forwarded.at(-1)[0],'https://panel-one-new.example.com/api/config');
+managedMachine.resources='{}';
+const savedFetch=globalThis.fetch;
+globalThis.fetch=async()=>new Response('upstream failure',{status:520});
+const upstreamFailure=await handle(request('/api/config','GET',admin,undefined,{'X-IP-Machine':registration.machine_id}),env);
+assert.equal(upstreamFailure.status,502);assert((await upstreamFailure.json()).error.includes('520'));
+globalThis.fetch=async()=>{throw Error('private connection details must not leak')};
+const connectionFailure=await handle(request('/api/config','GET',admin,undefined,{'X-IP-Machine':registration.machine_id}),env);
+assert.equal(connectionFailure.status,502);assert(!(await connectionFailure.text()).includes('private connection'));
+globalThis.fetch=savedFetch;
 assert.equal((await handle(request('/api/report','POST',admin,{}, {'X-IP-Machine':registration.machine_id}),env)).status,404);
 globalThis.fetch=async()=>Response.json([{ip:'<img src=x onerror=alert(1)>',details:JSON.stringify([{country:"US';alert(1)//",node_ip:'<svg onload=alert(1)>',port:'1 onclick=evil'}]),
   candidates:[{ip:"';alert(1)//",country:'US'}],log:'<raw log remains text>',last_seen:1}]);

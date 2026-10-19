@@ -199,14 +199,29 @@ async function proxyMachine(request, env, url) {
         headers.set('Authorization', basic(env.LEGACY_USER, env.LEGACY_PASSWORD));
         response = await env.LEGACY.fetch(new Request('https://legacy.invalid' + url.pathname, {method: request.method, headers, body: payload, redirect: 'manual'}));
     } else {
-        const machine = await env.DB.prepare('SELECT id,panel_origin,credentials FROM ip_machines WHERE id=?1').bind(id).first();
+        const machine = await env.DB.prepare('SELECT id,panel_origin,credentials,resources FROM ip_machines WHERE id=?1').bind(id).first();
         if (!machine) return json({error: '机器不存在或已移除'}, 404);
         const credentials = await unseal(env, machine.credentials, machine.id);
         // Validate again after DB reads to prevent an edited record becoming an SSRF target.
         machineInput({panel_origin: machine.panel_origin, ...credentials}, env);
+        // Management has its own route. A browser-reachable direct origin may
+        // return a Cloudflare 520 to Worker subrequests. Prefer only the same
+        // machine's provisioned panel tunnel; never accept a client-supplied URL.
+        let managementOrigin = machine.panel_origin;
+        const resources = JSON.parse(machine.resources || '{}');
+        const panelHost = 'panel-' + machine.id.slice(2) + '.' + env.CF_ZONE_NAME;
+        const panelDns = resources.dns?.[panelHost];
+        if (/^m-[a-f0-9]{24}$/.test(machine.id) && resources.tunnel_id && panelDns?.type === 'CNAME' &&
+            panelDns.content === resources.tunnel_id + '.cfargotunnel.com') {
+            managementOrigin = machineInput({panel_origin: 'https://' + panelHost, ...credentials}, env).origin;
+        }
         headers.set('Authorization', basic(credentials.username, credentials.password));
-        response = await fetch(machine.panel_origin + url.pathname, {method: request.method, headers, body: payload,
-            redirect: 'manual', signal: AbortSignal.timeout(25000)});
+        try {
+            response = await fetch(managementOrigin + url.pathname, {method: request.method, headers, body: payload,
+                redirect: 'manual', signal: AbortSignal.timeout(25000)});
+        } catch {
+            return json({error: '汇总后台连接独立面板失败（HTTPS 请求未完成）'}, 502);
+        }
     }
     if (response.status >= 300 && response.status < 400) return json({error: '机器返回重定向，已阻止'}, 502);
     // Never forward remote authentication challenges, cookies, redirects, or arbitrary headers.
@@ -217,7 +232,9 @@ async function proxyMachine(request, env, url) {
     // innerHTML, so validate all values it interpolates, including inline handlers.
     const raw=await limitedText(response);
     if(request.method==='POST')return json({ok:response.ok,...(!response.ok?{error:'所选机器未能保存配置'}:{})},response.status);
-    const data=JSON.parse(raw);
+    let data;
+    try { data=JSON.parse(raw); }
+    catch { return json({error: '独立面板返回非 JSON 响应，HTTP ' + response.status},502); }
     return json(request.method==='GET'?safePayload(url.pathname,data):data,response.status);
 }
 
