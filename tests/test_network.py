@@ -249,15 +249,17 @@ class NetworkTests(unittest.TestCase):
         links={'tcp':'vless://test@192.0.2.10:31001','udp':'hysteria2://test@192.0.2.10:31002',
                'home':'vless://home@192.0.2.10:31003'}
         n.write(self.root/'native-links.json',links)
-        verifier=types.SimpleNamespace(verify=lambda *a:{'ok':False,'reason':'port blocked'})
+        events=[]
+        verifier=types.SimpleNamespace(verify=lambda *a:events.append('verify') or {'ok':False,'reason':'port blocked'})
         real_path=pathlib.Path
         def local_path(value):
             return self.root/real_path(value).name if str(value).startswith('/root/') else real_path(value)
         with patch.dict(os.environ,{},clear=True),patch.object(n,'pathlib',types.SimpleNamespace(Path=local_path)), \
-             patch.object(n,'UNITS',self.root),patch.object(n,'firewall',return_value=[]) as ports,patch.object(n,'run'), \
+             patch.object(n,'UNITS',self.root),patch.object(n,'firewall',side_effect=lambda *a:events.append('firewall') or []) as ports,patch.object(n,'run'), \
              patch.object(n,'load_verifier',return_value=verifier),patch.object(n,'panel_check',return_value=False), \
              patch.object(n,'cf_credentials',side_effect=ValueError('missing authorization')),patch('sys.stdout',new_callable=io.StringIO):
             self.assertEqual(n.apply(),2)
+        self.assertEqual(events[0],'firewall');self.assertIn('verify',events[1:])
         self.assertEqual((self.root/'three-nodes-links.txt').read_text().splitlines(),list(links.values()))
         self.assertEqual(n.read(self.root/'links.json'),dict.fromkeys(links,''))
         self.assertIn(('tcp',30443),ports.call_args.args[0])
@@ -266,11 +268,43 @@ class NetworkTests(unittest.TestCase):
         summary=(self.root/'three-nodes-info.txt').read_text(encoding='utf-8')
         self.assertIn('https://192.0.2.10:30443/',summary)
         self.assertIn('已生成，公网检测未通过',summary)
-        self.assertIn('请开放TCP端口 80（证书申请与自动续期）',summary)
+        self.assertNotIn('请开放TCP端口 80',summary)
         self.assertNotIn('住宅代理内部端口',summary)
         detail=(self.root/'deployment-details.txt').read_text(encoding='utf-8')
         self.assertIn('住宅代理内部端口 30101',detail)
         self.assertEqual(n.read(self.root/'network-report.json')['ready_roles'],[])
+
+    def test_working_native_ports_do_not_request_reopening(self):
+        native={'tcp':'vless://direct@192.0.2.10:31001','udp':'hysteria2://test@192.0.2.10:31002','home':'vless://home@192.0.2.10:31003'}
+        with patch.dict(os.environ,{},clear=True):
+            text=n.concise_result({'mode':'direct','udp_available':True},{'public_ip':'192.0.2.10','panel_port':30443},{'username':'u','password':'p'},native,native,native,['https://192.0.2.10:30443/'],[],True,[])
+        self.assertNotIn('请在后台开放端口',text);self.assertNotIn('请开放',text)
+
+    def test_open_home_port_with_failed_upstream_is_not_reported_closed(self):
+        native={'tcp':'vless://direct@192.0.2.10:31001','udp':'hysteria2://test@192.0.2.10:31002','home':'vless://home@192.0.2.10:31003'}
+        state={'mode':'direct','udp_available':True};settings={'public_ip':'192.0.2.10','panel_port':30443}
+        report=[{'protocol':'tcp','internal_port':31003,'host_opened':True}]
+        with patch.object(n.socket,'create_connection') as connect:
+            n.probe_public_ports(state,settings,native,{'tcp':True,'udp':True,'home':False},['https://192.0.2.10:30443/'],report)
+        connect.assert_called_once();self.assertTrue(report[0]['public_reachable'])
+        with patch.dict(os.environ,{},clear=True):
+            text=n.concise_result(state,settings,{'username':'u','password':'p'},native,native,{k:v for k,v in native.items() if k!='home'},['https://192.0.2.10:30443/'],[],True,report)
+        self.assertNotIn('请开放TCP端口 31003',text)
+        self.assertIn('公网检测未通过（住宅IP节点）',text)
+        self.assertIn('无需重复开放该端口',text)
+
+    def test_unknown_mapping_is_not_probed_using_egress_ip(self):
+        native={'tcp':'vless://direct@192.0.2.10:31001'}
+        report=[{'protocol':'tcp','internal_port':31001,'host_opened':True}]
+        with patch.object(n.socket,'create_connection') as connect:
+            n.probe_public_ports({'mode':'mapped','mappings':{}},{'public_ip':'192.0.2.10','panel_port':30443},native,{},[],report)
+        connect.assert_not_called();self.assertIsNone(report[0]['public_reachable'])
+
+    def test_runtime_failure_reports_real_reason_without_blame_on_port80(self):
+        n.write(self.root/'certificate-status.json',{'stage':'runtime','ok':False,'reason':'证书运行环境下载失败'})
+        with patch.dict(os.environ,{},clear=True):
+            text=n.concise_result({'mode':'direct'},{'public_ip':'192.0.2.10','panel_port':30443},{'username':'u','password':'p'},{},{},{},[],[],True,[])
+        self.assertIn('证书运行环境下载失败',text);self.assertNotIn('请开放TCP端口 80',text)
 
     def test_unmapped_summary_keeps_native_links_and_one_action_list(self):
         state={'mode':'mapped','udp_available':False,'mappings':{}}
@@ -287,7 +321,7 @@ class NetworkTests(unittest.TestCase):
         for header,title in zip(headers,('① 节点链接','② 面板信息','③ 操作提醒')):
             self.assertIn(title,header)
         self.assertLess(text.index('详细日志：'),text.index(headers[0]))
-        self.assertLess(text.index('面板证书：'),text.index(headers[0]))
+        self.assertLess(text.index('面板 HTTPS：'),text.index(headers[0]))
         self.assertEqual(text.count('╚════════════════════════════════════════════╝'),3)
         self.assertEqual(text.rstrip().splitlines()[-1],'╚════════════════════════════════════════════╝')
         self.assertIn(native['tcp'],text.splitlines());self.assertIn(native['home'],text.splitlines())

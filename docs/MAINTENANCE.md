@@ -6,7 +6,9 @@
 
 最终结果固定为三个装饰框：节点链接、面板信息、操作提醒。检测说明与日志位置必须位于第一框之前；第三框之后不再追加信息。端口标题使用【请在后台开放端口】，节点 URI 不添加边框前缀，以便整段复制导入。
 
-终端使用三个结果框，之前实时显示安装/下载/服务启动过程。映射未配置时复制区可以含需要改地址/端口的原始链接，面板显示真实内部端口和替换提示，不代表已得到公网入口。CF 正常时仍按用户要求显示可选备用端口。系统安装细节查看当次 /root/ip-install.*.log，完整检测说明查看 /etc/residential-stack/deployment-details.txt，均可能含凭据，不提交日志。
+终端使用三个结果框，之前实时显示安装/下载/服务启动过程。映射未配置时复制区可以含需要改地址/端口的原始链接，面板显示真实内部端口和替换提示，不代表已得到公网入口。最新要求先放行再检查，已通端口不重复提醒；CF 备用端口也按检查结果过滤。系统安装细节查看当次 /root/ip-install.*.log，完整检测说明查看 /etc/residential-stack/deployment-details.txt，均可能含凭据，不提交日志。
+
+环境补全与证书兼容见 ENVIRONMENT.md。新增 cert-runtime.py、src/preflight.sh 与环境/证书状态报告；旧系统 Python 自动使用隔离证书运行环境，不再因低于 3.10 静默跳过。Ubuntu 20.04 已真实签发并外部校验 IP 证书，节点/账号文件不变；不要把这项证书验收写成所有系统完整安装验收。
 
 2026-10-19 修复已生成信息隐藏、面板端口漏报，以及私人授权 hub_request 请求头遗漏。复制区可以包含待放行入口；links.json 的就绪含义保持不变。具体测试见 TESTING.md。
 
@@ -75,7 +77,7 @@ sudo python3 /root/ip-cloudflare-cleanup/network-adapter.py cleanup-cloudflare -
 ## 外部依赖与已知限制
 
 - sing-box 固定 1.14.1；cloudflared 安装使用官方 latest 资产摘要并记录实际版本，没有后台自动替换系统程序。
-- Certbot/dns-cloudflare 固定 5.4.0，Python 至少 3.10。
+- Certbot/dns-cloudflare 固定 5.4.0，所需 Python 3.10+ 自动复用或隔离补全；系统 Python 3.8 的兼容流程已实测。uv 工具版本、SHA256 和运行路径见 ENVIRONMENT.md。
 - 公开检测依赖 HTTPS IP 回显服务；服务故障会造成假阴性，未加入带宽压力测试。
 - 仍以 IPv4 VPS 为主要支持目标，没有完整 IPv6-only 流程。
 - 发现器识别活动 sing-box，x-ui-only 情况补建独立入口，不修改 x-ui 数据库。

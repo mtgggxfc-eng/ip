@@ -24,7 +24,8 @@ def build():
     replacements = {'__PANEL_B64__': encoded('residential-panel.py'),
         '__AGENT_B64__': encoded('residential-agent.py'), '__PROXY_B64__': encoded('residential-proxy.py'),
         '__DISCOVERY_B64__': encoded('discover-existing.py'), '__NETWORK_B64__': encoded('network-adapter.py'),
-        '__VERIFY_B64__': encoded('verify-node.py')}
+        '__VERIFY_B64__': encoded('verify-node.py'), '__CERT_B64__': encoded('cert-runtime.py'),
+        '__PREFLIGHT_B64__': encoded('src/preflight.sh')}
     updater = (ROOT / 'src/update.sh').read_text(encoding='utf-8')
     for marker, value in replacements.items(): updater = updater.replace(marker, value)
     (ROOT / 'gengxin.sh').write_text(updater, encoding='utf-8', newline='\n')

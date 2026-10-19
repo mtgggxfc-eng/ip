@@ -15,6 +15,7 @@ import os
 import pathlib
 import platform
 import re
+import runpy
 import secrets
 import shutil
 import socket
@@ -314,6 +315,43 @@ def generated_exports(candidates, selected, native_links=None):
             for role in ('tcp', 'udp', 'home')}
 
 
+def probe_public_ports(state, settings, native, native_good, panels, port_report):
+    """Probe only this project's known public endpoints after firewall attempts.
+
+    TCP connect distinguishes an open listener from an unhealthy home upstream.
+    UDP requires its real protocol test. Unknown NAT addresses are never probed
+    using the egress IP as if it were a confirmed inbound address.
+    """
+    certificate = read(ROOT / 'certificate-status.json')
+    for item in port_report:
+        proto, inside = item['protocol'], item['internal_port']
+        host, outside, reachable = '', None, None
+        if inside == 80 and proto == 'tcp':
+            reachable = True if certificate.get('stage') == 'applied' and certificate.get('ok') else None
+        elif inside == settings['panel_port'] and proto == 'tcp':
+            host = state.get('external_address') if state['mode'] == 'mapped' else settings['public_ip']
+            outside = state.get('panel_external_port') if state['mode'] == 'mapped' else inside
+            reachable = any(urllib.parse.urlsplit(url).hostname == host and (urllib.parse.urlsplit(url).port or 443) == outside for url in panels)
+        else:
+            for role, uri in native.items():
+                if not uri: continue
+                parsed = urllib.parse.urlsplit(uri)
+                if parsed.port == inside and proto == ('udp' if parsed.scheme in ('hysteria2','hy2') else 'tcp'):
+                    host = state.get('external_address') if state['mode'] == 'mapped' else parsed.hostname
+                    outside = state.get('mappings', {}).get(role) if state['mode'] == 'mapped' else inside
+                    reachable = bool(native_good.get(role)) if host and outside else None
+                    break
+        if reachable is not True and proto == 'tcp' and host and outside:
+            try:
+                with socket.create_connection((host, int(outside)), timeout=4): reachable = True
+            except OSError: reachable = False
+        if not host or not outside:
+            if inside != 80: reachable = None
+        item['public_reachable'] = reachable
+        item['public_scope'] = 'vps-public-endpoint'
+    return port_report
+
+
 def concise_result(state, settings, auth, native, exported, selected, panels, pending_panels, hub_ok, port_report):
     """Show generated configuration and the next action once. Details live in logs."""
     roles = ('tcp', 'udp', 'home')
@@ -329,6 +367,8 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
         lines.append('下方原始链接的地址和端口需改为平台分配的外部地址、外部端口。')
     waiting = [names[r] for r in roles if exported.get(r) and r not in selected]
     if waiting: lines.append('状态：已生成，公网检测未通过（' + '、'.join(waiting) + '）。')
+    if native.get('home') and exported.get('home') and 'home' not in selected and any(p.get('protocol') == 'tcp' and p.get('internal_port') == urllib.parse.urlsplit(native['home']).port and p.get('public_reachable') is True for p in port_report):
+        lines.append('住宅 TCP 端口已可连接；节点握手或上游出口检测未通过，请查看详细日志，无需重复开放该端口。')
     if not exported.get('udp') and state.get('udp_available'):
         lines.append('Hysteria2 节点未生成，请查看详细日志。')
     elif exported.get('udp', '').startswith('trojan://'):
@@ -341,10 +381,13 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
                    '面板用户名：' + auth['username'], '面板密码：' + auth['password']]
     if panel and not panels: lines.append('面板待验证，请检查端口和证书。')
     if not panels:
-        cert_hint = ('已配置域名证书，请检查域名入口及续期日志。' if state.get('certificate_mode') == 'domain' else
+        certificate = read(ROOT / 'certificate-status.json')
+        cert_hint = (certificate['reason'] if certificate.get('reason') and not certificate.get('ok') else
+                     '正式证书已安装；请检查管理面板端口及 HTTPS 连通性。' if certificate.get('stage') == 'applied' else
+                     '已配置域名证书，请检查域名入口及续期日志。' if state.get('certificate_mode') == 'domain' else
                      '随机端口映射不能完成 IP 证书验证，需使用已授权的域名或隧道入口。' if state['mode'] == 'mapped' else
-                     '请放行公网 TCP 80 后重跑命令申请证书。')
-        lines.append('面板证书：尚未验证受信任；' + cert_hint)
+                     '请检查证书申请日志；HTTPS 检测失败不能直接判定 TCP 80 未开放。')
+        lines.append('面板 HTTPS：' + cert_hint)
     # Separate required native listeners from optional direct backups for CF.
     native_roles = [r for r in roles if native.get(r) and (exported.get(r) == native[r] or
                     state['mode'] == 'mapped' and state.get('external_address') and state.get('mappings', {}).get(r) and
@@ -352,13 +395,18 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
     cf_panels = {state.get(key, {}).get('panel') for key in ('private_hosts', 'tunnel_hosts')}
     panel_native = not panel or urllib.parse.urlsplit(panel).hostname not in cf_panels
     needed = []
+    def port_open(proto, inside, fallback=False):
+        entry = next((p for p in port_report if p.get('protocol') == proto.lower() and p.get('internal_port') == inside), {})
+        return entry.get('public_reachable', fallback) is True
     for r in native_roles:
         uri = urllib.parse.urlsplit(native[r])
         proto = 'UDP' if uri.scheme in ('hysteria2', 'hy2') else 'TCP'
-        needed.append((proto, uri.port, names[r]))
-    if panel_native: needed.append(('TCP', settings['panel_port'], '管理面板'))
-    if state['mode'] == 'direct' and not panels and (ROOT / 'renew-panel-cert.sh').exists() and state.get('certificate_mode') != 'domain':
-        needed.append(('TCP', 80, '证书申请与自动续期'))
+        if not port_open(proto, uri.port, r in selected): needed.append((proto, uri.port, names[r]))
+    if panel_native and not port_open('TCP', settings['panel_port'], bool(panels)):
+        needed.append(('TCP', settings['panel_port'], '管理面板'))
+    certificate = read(ROOT / 'certificate-status.json')
+    if state['mode'] == 'direct' and certificate.get('stage') == 'issue' and not certificate.get('ok') and '无法访问公网 TCP 80' in certificate.get('reason','') and not port_open('TCP',80):
+        needed.append(('TCP', 80, '证书验证连接失败，请核对平台及防火墙'))
     actions = []
     if needed:
         if ready:
@@ -367,15 +415,16 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
             actions += ['【请在后台开放端口】重要！']
         actions += ['请开放' + proto + '端口 ' + str(port) + '（' + name + '）' for proto, port, name in needed]
     elif ready:
-        actions += ['复制节点导入客户端；当前隧道入口无需新增公网入站映射。']
+        actions += ['复制节点导入客户端；' + ('当前隧道入口无需新增公网入站映射。' if not panel_native else '当前入口检测通过，无需重复开放端口。')]
     else:
-        actions += ['检查隧道连接，稍后重跑安装命令。']
+        actions += ['请按上方检测原因处理未就绪项目，再重跑命令。']
     optional = []
     for r in roles:
         if native.get(r) and r not in native_roles:
             uri = urllib.parse.urlsplit(native[r])
-            optional.append(('UDP' if uri.scheme in ('hysteria2', 'hy2') else 'TCP') + ' ' + str(uri.port))
-    if not panel_native: optional.append('TCP ' + str(settings['panel_port']))
+            proto = 'UDP' if uri.scheme in ('hysteria2', 'hy2') else 'TCP'
+            if not port_open(proto, uri.port): optional.append(proto + ' ' + str(uri.port))
+    if not panel_native and not port_open('TCP', settings['panel_port']): optional.append('TCP ' + str(settings['panel_port']))
     if optional:
         if not any('【请在后台开放端口】' in line for line in actions): actions.append('【请在后台开放端口】（仅备用直连需要）')
         actions.append('备用直连端口（可选，' + ('需在平台创建映射' if state['mode'] == 'mapped' else '需在云平台放行入站') + '）：' + '、'.join(dict.fromkeys(optional)) + '。')
@@ -391,6 +440,7 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
             hint = '（导入链接后，请替换真实端口）' if raw_mapping else ''
             actions += ['已生成两条TCP节点', '第一条：直连VLESS+reality' + hint, '第二条：中转家宽IP节点' + hint]
     log = os.environ.get('IP_INSTALL_LOG') or str(ROOT / 'deployment-details.txt')
+    if port_report: lines.append('端口检测范围：本机访问公网入口；入站可连接与住宅上游可用分别检测。')
     lines += ['', '详细日志：' + log]
     # Decorations surround sections, never prefix URIs, so multi-line import
     # remains possible. All diagnostics precede the three final sections.
@@ -461,13 +511,9 @@ def dns_panel_setup(cf, c, state, settings, private_host=None):
         try: content = str(ipaddress.IPv4Address(address)); kind = 'A'
         except ValueError: content = address; kind = 'CNAME'
         ensure_dns(cf, c, state, host, kind, content, False)
-    certbot = pathlib.Path('/opt/residential-certbot/bin/certbot')
-    if not certbot.exists():
-        if run(['python3', '-m', 'venv', '/opt/residential-certbot'], check=False).returncode:
-            run(['apt-get', 'install', '-y', 'python3-venv'], timeout=180)
-            run(['python3', '-m', 'venv', '/opt/residential-certbot'])
-    run(['/opt/residential-certbot/bin/pip', '--disable-pip-version-check', 'install', 'certbot==5.4.0'] +
-         ([] if private_host else ['certbot-dns-cloudflare==5.4.0']), timeout=180)
+    runtime = ROOT / 'cert-runtime.py'
+    if not runtime.is_file(): raise ValueError('证书环境模块缺失，请重跑最新安装命令补全')
+    certbot = pathlib.Path(runpy.run_path(str(runtime))['ensure_certbot'](dns=not bool(private_host)))
     if private_host:
         for action in ('auth', 'cleanup'):
             hook = ROOT / ('dns-' + action + '.sh')
@@ -742,6 +788,7 @@ def apply():
             uri = ws_uri(role, state['ws'][role], assigned_hosts[role])
             if uri not in candidates[role]: candidates[role].append(uri)
     selected, checks = choose_verified(candidates, test)
+    probe_public_ports(state, settings, links, native_good, panel_urls, port_report)
     exported = generated_exports(candidates, selected, links)
     pending_panels = [u for u in pending_panel_urls(state, settings) if u not in panel_urls]
     report = {'schema': 1, 'mode': state['mode'], 'checks': checks, 'ports': port_report,

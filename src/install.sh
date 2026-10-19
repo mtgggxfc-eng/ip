@@ -153,6 +153,13 @@ if [[ -z "${IP_SETUP_MODE:-}" ]]; then
 fi
 case "$IP_SETUP_MODE" in auto|manual) ;; *) die '安装方式只能是 auto 或 manual。' ;; esac
 export IP_SETUP_MODE
+STAGE='检测并补全运行环境'
+note "$STAGE"
+ENVIRONMENT_TOOL="$(mktemp)"
+ENVIRONMENT_REPORT="$(mktemp)"
+printf '%s' '__PREFLIGHT_B64__' | base64 -d > "$ENVIRONMENT_TOOL"
+live bash "$ENVIRONMENT_TOOL" "$ENVIRONMENT_REPORT"
+rm -f "$ENVIRONMENT_TOOL"
 STAGE='检查现有节点和面板'
 DISCOVERY_TOOL="$(mktemp)"
 printf '%s' '__DISCOVERY_B64__' | base64 -d > "$DISCOVERY_TOOL"
@@ -168,6 +175,8 @@ NETWORK_TOOL="$(mktemp)"
 printf '%s' '__NETWORK_B64__' | base64 -d > "$NETWORK_TOOL"
 mapfile -t NETWORK_SETUP < <(python3 "$NETWORK_TOOL" prepare)
 [[ ${#NETWORK_SETUP[@]} == 2 ]] || die '网络类型检查失败。'
+install -m 600 "$ENVIRONMENT_REPORT" "$STACK_DIR/environment-report.json"
+rm -f "$ENVIRONMENT_REPORT"
 IP_NETWORK_MODE="${NETWORK_SETUP[0]}"; IP_DISABLE_UDP="${NETWORK_SETUP[1]}"
 export IP_NETWORK_MODE IP_DISABLE_UDP
 if [[ "$IP_NETWORK_MODE" == mapped ]] || python3 -c 'import json; import sys; sys.exit(0 if json.load(open("/etc/residential-stack/network.json")).get("certificate_mode")=="domain" else 1)'; then export IP_SKIP_CERT=1; fi
@@ -214,14 +223,6 @@ if [[ "$NEED_STACK" == 1 ]]; then
     fi
   done
 fi
-
-STAGE='安装基础环境'
-note "$STAGE"
-export DEBIAN_FRONTEND=noninteractive
-live apt-get update -q
-printf '软件源更新完成，正在安装所需组件…\n'
-live apt-get install -y ca-certificates curl python3 openssl iproute2 iptables openvpn cron
-printf '基础环境安装完成。\n'
 
 STAGE='确认节点参数'
 USED_PORTS=()

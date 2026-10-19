@@ -4,6 +4,8 @@
 
 第一次只显示一个菜单：回车自动；2 手动。可以预先设置 IP_SETUP_MODE=auto/manual 省略这个菜单。自动模式的 ask() 不读终端，不会继续询问参数。
 
+每次执行先检测并补全运行环境，包括已有完整安装的续装分支；范围与自动修复规则见 ENVIRONMENT.md。
+
 新部署自动使用随机空闲端口、住宅国家 JP、Reality 域名 www.amazon.com；已有国家不覆盖。手动模式能填写这些参数，以及映射、CF 令牌和域名。默认采用原生 Reality/Hysteria2，不修改用户其他服务。
 
 ## 2. 环境判断与连接优先级
@@ -45,6 +47,8 @@ HTTP-01 只能验证公网 80；内部 80 映射到公网随机端口不满足�
 
 普通公网的 IP 证书首次申请及定时续期复用项目防火墙适配器，尝试放行本机 TCP 80（UFW/firewalld/iptables），并把 80 纳入项目开机端口规则。云平台安全组仍需用户放行公网 TCP 80。映射机器不因此尝试为共享出口 IP 申请证书；未配置授权域名/隧道时，内部临时证书的浏览器警告无法由脚本消除。输出“尚未验证受信任”不等于证书一定自签，也可能是入口未放行。
 
+证书模块不再因为系统 Python 小于 3.10 就跳过申请。自动复用可用 Python，或在 /etc/residential-stack/cert-runtime 安装已校验的独立运行环境，为 /opt/residential-certbot 创建虚拟环境；IP 与域名 DNS 证书共用。certificate-status.json 记录实际失败阶段，摘要使用实际原因；只有证书服务返回连接验证失败时才额外提示核对公网 80。手动申请与 IP 定时续期通过 flock 串行，避免开机定时器和安装同时占用 80。
+
 自动切换目前发生在安装/再次执行时，并非持续的跨入口故障切换服务。独立隧道会自行重连；没有承诺同一个浏览器 URL 可在任意 CF 故障时透明切到直连。CF API 或同一 DNS 提供商故障时，两种方式可能同时受影响。
 
 参考：[验证方式](https://letsencrypt.org/docs/challenge-types/)、[IP 证书](https://letsencrypt.org/2026/03/11/shorter-certs-certbot)、[CF 连接检测](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/troubleshoot-tunnels/connectivity-prechecks/)。
@@ -59,6 +63,10 @@ HTTP-01 只能验证公网 80；内部 80 映射到公网随机端口不满足�
 4. 不清空规则、不更改默认策略。用自己的 oneshot 服务在开机时重放。
 
 本机命令成功不等于云端已经放行；nftables 特殊链、云安全组、多层防火墙仍可能拦截。公开入口实测是另一项证据。
+
+执行顺序固定为可选云 API 建立/复用映射、本机指定端口放行、实际协议和公开端口检测。已经验证通过的节点/面板端口不再提示开放；TCP 可建立连接但住宅上游失败时，不提示重复开放该 TCP 端口。UDP 必须通过 Hysteria2 实际测试，不能用 TCP 探测证明 UDP。随机映射未知时不把出口 IP 当作入站探测目标，显示需要后台确认的项目。CF 备用直连也按检查结果过滤，已通的不列。
+
+network-report.json 的 ports[].public_reachable 为 true/false/null，分别表示本机访问已知公网入口成功/失败/地址未知或尚无法验证；public_scope 记录检测范围。这是 VPS 发起的自测，不等于用户网络验收，也不等于已读取云安全组配置。80 在成功申请后可能没有常驻监听，不能因为 Certbot 已退出就误报端口未放行。
 
 NVIDIA 是可选的平台适配器，不是通用流程的前提。配置 API Bearer 授权后，可按默认网卡 MAC 唯一匹配接口，也可显式指定 interface UUID；匹配不唯一就停止平台写入。每次重跑查询当前映射，复用已有同接口同内部端口的服务，不修改它；只记录和清理自己新建的服务。没有 UDP 字段，不自动创建所谓 UDP Other 服务。没有配置此适配器的授权时，不向它请求或询问该平台专属参数。
 
@@ -123,7 +131,7 @@ verify-node.py 为每个候选启动临时 sing-box，只监听 loopback。经�
 
 终端与 /root/three-nodes-info.txt 使用 concise_result()，只显示生成数/状态、链接复制区、面板地址或模板、登录信息及下一步。节点原始链接通过 generated_exports() 的 native_links 回退输出；即使映射未知也保留配置，必须明确提示替换地址/端口，不能升级 ready_roles 或写入已验证 links.json。
 
-需要手动开放/映射的端口只列一次；已工作的 CF 链路不显示重复的必需入站步骤，但按用户要求保留一行“备用直连端口（可选）”。完整说明保存 /etc/residential-stack/deployment-details.txt；安装器另创建本次 /root/ip-install.XXXXXX.log，使用 umask 077，通过 IP_INSTALL_LOG 传给子进程。
+需要手动开放/映射的端口只列一次；已检测通过的端口不列，包括备用直连。CF 备用项只列检测失败或尚缺映射的端口。完整说明保存 /etc/residential-stack/deployment-details.txt；安装器另创建本次 /root/ip-install.XXXXXX.log，使用 umask 077，通过 IP_INSTALL_LOG 传给子进程。
 
 quiet() 将更新器和本机握手细节写入日志，保留退出码；live() 使用 tee 实时显示基础组件安装、节点下载和面板/代理服务启动过程，并同时记日志，依赖 pipefail 保留失败状态。不要全局重定向：初始菜单及手动参数提示必须可见。所有过程信息出现在三个结果框前；第三框后不追加信息。安装日志在卸载后保留，便于排障；需由 root 自行清理。无已生成 UDP/替代入口时，操作区说明当前按不支持 UDP 处理，已有 TCP 直连与家宽中转两条节点；不再引导用户填写 CF 令牌。
 

@@ -27,6 +27,8 @@ flowchart LR
 |---|---|---|
 | src/install.sh | 预检、菜单、发现、补建、网络适配 | 重建 |
 | src/update.sh | 面板/代理更新、内部 API、证书 | 重建 |
+| src/preflight.sh | 每次安装的依赖补齐、TUN/权限/空间/DNS/时钟检查 | Bash 检查、重建 |
+| cert-runtime.py | 自动准备证书 Python/Certbot、下载校验、失败原因记录 | 证书回归、重建 |
 | jkyj.sh、gengxin.sh | 自包含发布入口 | 生成文件，勿直接改载荷 |
 | discover-existing.py | 只读扫描活动 unit，恢复 Reality/HY2/住宅链接和面板 | 测发现逻辑、重建 |
 | residential-panel.py | HTTPS 页面、认证 API、校验、住宅端口同步和回滚 | 测 API/TLS、重建 |
@@ -67,6 +69,10 @@ flowchart LR
 | network-report.json | 测试范围、结果、端口状态；generated_roles/ready_roles 分开，pending_panel_urls 不代表已可达；不含完整节点链接 |
 | ws.json | loopback WS 入口及住宅路由 |
 | firewall-ports.json | 本项目请求放行的协议与内部端口 |
+| environment-report.json | 当次环境检测结果及限制，不含登录凭据 |
+| certificate-status.json | 证书环境/申请/加载阶段及实际失败分类 |
+| cert-runtime/ | 仅供证书使用的 uv、托管 Python 与缓存，随自有 stack 目录卸载 |
+| cert-renew.lock | IP 证书手动申请与定时续期的互斥锁 |
 | acme*、panel-*.pem、证书脚本 | 证书、独立 Certbot 数据与续期 |
 
 | 其他路径 | 职责 |
