@@ -324,10 +324,9 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
     raw_mapping = [r for r in roles if state['mode'] == 'mapped' and exported.get(r) and
                    r not in selected and exported[r] == native.get(r) and
                    not (state.get('external_address') and state.get('mappings', {}).get(r))]
-    if count:
-        lines += ['', '节点链接（可一起复制导入）：', *[exported[r] for r in roles if exported.get(r)]]
+    node_lines = [exported[r] for r in roles if exported.get(r)] or ['暂无已生成节点。']
     if raw_mapping:
-        lines.append('上述原始链接的地址和端口需改为平台分配的外部地址、外部端口。')
+        lines.append('下方原始链接的地址和端口需改为平台分配的外部地址、外部端口。')
     waiting = [names[r] for r in roles if exported.get(r) and r not in selected]
     if waiting: lines.append('状态：已生成，公网检测未通过（' + '、'.join(waiting) + '）。')
     if not exported.get('udp'):
@@ -337,11 +336,10 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
     panel = (panels or pending_panels or [''])[0]
     unresolved = 'https://' + (state.get('external_address') or settings['public_ip']) + ':____/  【端口待检测】' + (
         '' if state.get('external_address') else '（出口 IP 候选，入站地址需确认）')
-    lines += ['', '住宅管理面板：' + (panel or unresolved),
-              '面板用户名：' + auth['username'], '面板密码：' + auth['password']]
+    panel_lines = ['住宅管理面板：' + (panel or unresolved),
+                   '面板用户名：' + auth['username'], '面板密码：' + auth['password']]
     if panel and not panels: lines.append('面板待验证，请检查端口和证书。')
-    # Only the entries actually exported through native listeners need these
-    # ports. Do not advertise unused native backups for working CF WS links.
+    # Separate required native listeners from optional direct backups for CF.
     native_roles = [r for r in roles if native.get(r) and (exported.get(r) == native[r] or
                     state['mode'] == 'mapped' and state.get('external_address') and state.get('mappings', {}).get(r) and
                     exported.get(r) == mapped_link(native[r], state['external_address'], state['mappings'][r]))]
@@ -353,21 +351,21 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
         proto = 'UDP' if uri.scheme in ('hysteria2', 'hy2') else 'TCP'
         needed.append((proto, uri.port, names[r]))
     if panel_native: needed.append(('TCP', settings['panel_port'], '住宅面板'))
+    actions = []
     if needed:
         if ready:
-            lines += ['', '下一步：复制节点导入客户端。',
-                      '如外部连接失败，检查平台' + ('端口映射：' if state['mode'] == 'mapped' else '入站放行：') +
-                      '、'.join(dict.fromkeys(proto + ' ' + str(port) for proto, port, _ in needed)) + '。']
+            actions += ['复制节点导入客户端。', '【请在后台开放端口】（外部连接失败时检查）',
+                        '、'.join(dict.fromkeys(proto + ' ' + str(port) for proto, port, _ in needed))]
         elif state['mode'] == 'mapped':
-            lines += ['', '下一步：在平台后台确认以下端口映射：']
-            lines += [proto + ' ' + str(port) + '（' + name + '）' for proto, port, name in needed]
-            lines.append('将外部地址和端口填入 ' + str(ROOT / 'port-mappings.json') + '，再重跑命令按回车即可自动更新。')
+            actions += ['【请在后台开放端口】']
+            actions += [proto + ' ' + str(port) + '（' + name + '）' for proto, port, name in needed]
+            actions.append('映射平台：将外部地址和端口填入 ' + str(ROOT / 'port-mappings.json') + '，再重跑命令按回车自动更新。')
         else:
-            lines += ['', '下一步：在云平台放行入站端口：' + '、'.join(dict.fromkeys(proto + ' ' + str(port) for proto, port, _ in needed)) + '。']
+            actions += ['【请在后台开放端口】', '、'.join(dict.fromkeys(proto + ' ' + str(port) for proto, port, _ in needed))]
     elif ready:
-        lines += ['', '下一步：复制节点导入客户端；无需新增公网入站映射。']
+        actions += ['复制节点导入客户端；当前隧道入口无需新增公网入站映射。']
     else:
-        lines += ['', '下一步：检查隧道连接，稍后重跑安装命令。']
+        actions += ['检查隧道连接，稍后重跑安装命令。']
     optional = []
     for r in roles:
         if native.get(r) and r not in native_roles:
@@ -375,17 +373,23 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
             optional.append(('UDP' if uri.scheme in ('hysteria2', 'hy2') else 'TCP') + ' ' + str(uri.port))
     if not panel_native: optional.append('TCP ' + str(settings['panel_port']))
     if optional:
-        lines.append('备用直连端口（可选，' + ('需在平台创建映射' if state['mode'] == 'mapped' else '需在云平台放行入站') + '）：' + '、'.join(dict.fromkeys(optional)) + '。')
+        if not any('【请在后台开放端口】' in line for line in actions): actions.append('【请在后台开放端口】（仅备用直连需要）')
+        actions.append('备用直连端口（可选，' + ('需在平台创建映射' if state['mode'] == 'mapped' else '需在云平台放行入站') + '）：' + '、'.join(dict.fromkeys(optional)) + '。')
     failed_host = any(not item.get('host_opened') for item in port_report if any(item.get('protocol') == proto.lower() and item.get('internal_port') == port for proto, port, _ in needed))
-    if failed_host: lines.append('本机防火墙放行失败，还需检查上述端口的系统防火墙规则。')
+    if failed_host: actions.append('本机防火墙放行失败，还需检查上述端口的系统防火墙规则。')
     private = bool(os.environ.get('IP_HUB_URL') or read(ROOT / 'hub.json').get('url'))
     if private and not hub_ok:
-        lines.append('汇总接入未完成：检查面板和隧道后重跑原命令。' if read(ROOT / 'hub.json').get('machine_token') else
+        actions.append('汇总接入未完成：检查面板和隧道后重跑原命令。' if read(ROOT / 'hub.json').get('machine_token') else
                      '私人授权未完成：从汇总面板重新取得有效命令后重试。')
     elif state['mode'] == 'mapped' and not exported.get('udp'):
-        lines.append('需要第二条 TCP 替代入口：重跑命令选 2，填写自己的 CF 域名和令牌。')
+        actions.append('需要第二条 TCP 替代入口：重跑命令选 2，填写自己的 CF 域名和令牌。')
     log = os.environ.get('IP_INSTALL_LOG') or str(ROOT / 'deployment-details.txt')
     lines += ['', '详细日志：' + log]
+    # Decorations surround sections, never prefix URIs, so multi-line import
+    # remains possible. All diagnostics precede the three final sections.
+    for title, content in [('① 节点链接（可一起复制导入）', node_lines),
+                           ('② 面板信息', panel_lines), ('③ 操作提醒', actions)]:
+        lines += ['', '╔══════════ ' + title + ' ══════════╗', *content, '╚════════════════════════════════════════════╝']
     return '\n'.join(lines) + '\n'
 
 

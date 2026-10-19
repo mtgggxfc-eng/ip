@@ -276,12 +276,22 @@ class NetworkTests(unittest.TestCase):
             text=n.concise_result(state,settings,{'username':'test','password':'test-password'},native,exported,{},[],[],True,[])
         self.assertIn(native['tcp'],text);self.assertIn(native['home'],text)
         self.assertIn('需改为平台分配的外部地址、外部端口',text)
-        self.assertEqual(text.count('下一步：'),1)
+        self.assertEqual(text.count('【请在后台开放端口】'),1)
+        headers=[line for line in text.splitlines() if line.startswith('╔')]
+        self.assertEqual(len(headers),3)
+        for header,title in zip(headers,('① 节点链接','② 面板信息','③ 操作提醒')):
+            self.assertIn(title,header)
+        self.assertLess(text.index('详细日志：'),text.index(headers[0]))
+        self.assertLess(text.index('第二条未生成'),text.index(headers[0]))
+        self.assertEqual(text.count('╚════════════════════════════════════════════╝'),3)
+        self.assertEqual(text.rstrip().splitlines()[-1],'╚════════════════════════════════════════════╝')
+        self.assertIn(native['tcp'],text.splitlines());self.assertIn(native['home'],text.splitlines())
+        self.assertNotIn('下一步：在平台后台创建以下端口映射：',text)
         self.assertEqual(text.count('21479'),1)
         self.assertIn('第二条未生成',text)
         self.assertNotIn('53583',text)
         self.assertNotIn('NVIDIA',text)
-        self.assertLess(len(text.splitlines()),25)
+        self.assertLess(len(text.splitlines()),35)
 
     def test_working_cf_summary_lists_optional_native_ports_once(self):
         state={'mode':'mapped','udp_available':False,'mappings':{},'private_hosts':{'panel':'panel.example.com'}}
