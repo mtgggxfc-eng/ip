@@ -5,6 +5,6 @@
     "discover-existing.py", "residential-panel.py", "residential-agent.py", "residential-proxy.py",
     "network-adapter.py", "verify-node.py", "panel-original.html"
   ],
-  "source_directories": ["docs", "src", "scripts", "tests", "hub"],
+  "source_directories": ["docs", "src", "scripts", "tests", "hub", "bootstrap"],
   "allowed_suffixes": [".md", ".py", ".sh", ".js", ".mjs", ".html", ".sql", ".toml", ".json"]
 }

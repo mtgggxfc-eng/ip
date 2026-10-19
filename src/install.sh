@@ -226,7 +226,7 @@ printf '基础环境安装完成。\n'
 STAGE='确认节点参数'
 USED_PORTS=()
 PANEL_PORT=''; SOCKS_PORT=''; REALITY_PORT=''; HY2_PORT=''; HOME_PORT=''
-COUNTRY='US'
+COUNTRY='JP'
 if [[ "$NEED_STACK" == 1 ]]; then
   if [[ -f "$STACK_DIR/settings.json" && -f "$STACK_DIR/auth.json" ]]; then
     mapfile -t SAVED < <(python3 - "$STACK_DIR" <<'PY'
@@ -242,8 +242,8 @@ PY
   else
     ask_port PANEL_PORT '住宅管理面板 HTTPS' tcp
     ask_port SOCKS_PORT '住宅代理内部端口' tcp
-    if [[ "$IP_SETUP_MODE" == manual ]]; then read -r -p '住宅出口国家代码（回车使用 US）: ' COUNTRY </dev/tty; fi
-    COUNTRY="${COUNTRY:-US}"; COUNTRY="${COUNTRY^^}"
+    if [[ "$IP_SETUP_MODE" == manual ]]; then read -r -p '住宅出口国家代码（回车使用 JP）: ' COUNTRY </dev/tty; fi
+    COUNTRY="${COUNTRY:-JP}"; COUNTRY="${COUNTRY^^}"
     [[ "$COUNTRY" =~ ^[A-Z]{2}$ ]] || die '国家代码必须为两个英文字母，如 US、JP。'
   fi
   ask_port HOME_PORT '家宽出口 VLESS + Reality' tcp

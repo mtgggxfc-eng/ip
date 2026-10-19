@@ -388,7 +388,8 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
     if not state.get('udp_available') and not exported.get('udp'):
         actions += ['-' * 60, '当前环境不支持UDP节点。']
         if exported.get('tcp') and exported.get('home'):
-            actions += ['已生成两条TCP节点', '第一条：直连VLESS+reality', '第二条：中转家宽IP节点']
+            hint = '（导入链接后，请替换真实端口）' if raw_mapping else ''
+            actions += ['已生成两条TCP节点', '第一条：直连VLESS+reality' + hint, '第二条：中转家宽IP节点' + hint]
     log = os.environ.get('IP_INSTALL_LOG') or str(ROOT / 'deployment-details.txt')
     lines += ['', '详细日志：' + log]
     # Decorations surround sections, never prefix URIs, so multi-line import

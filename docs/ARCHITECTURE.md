@@ -40,6 +40,8 @@ flowchart LR
 | hub/panel.html | 原页面副本，运行时注入机器选择器 | 生成文件 |
 | hub/schema.sql | 专用 D1 表，不修改旧表 | 备份后迁移 |
 | hub/wrangler.example.toml | 无密钥、无生产路由的部署样例 | 复制为私有配置 |
+| bootstrap/install.sh | 公共短入口，下载原安装器并自动判断 root/sudo | Bash 检查、模拟权限测试 |
+| bootstrap/worker.js、wrangler.example.toml | 独立无绑定的 HTTPS 脚本分发服务与自部署样例 | Node 检查、单独部署；详见 BOOTSTRAP.md |
 | scripts/build.py | 标准库构建器，内嵌源码与页面 | 每次源码修改后执行 |
 | scripts/check.py | 语法、构建一致性、Python/Node 回归 | 发布前执行 |
 | tests/ | 不改真实云的测试，以及显式选择的协议实测 | 随功能维护 |

@@ -24,12 +24,13 @@ def main():
     git_bash = pathlib.Path('C:/Program Files/Git/bin/bash.exe')
     bash = str(git_bash) if os.name == 'nt' and git_bash.exists() else shutil.which('bash')
     if not bash: raise RuntimeError('检查需要 Bash')
-    for path in ('jkyj.sh', 'gengxin.sh', 'xiezai.sh'): run([bash, '-n', path])
+    for path in ('jkyj.sh', 'gengxin.sh', 'xiezai.sh', 'bootstrap/install.sh'): run([bash, '-n', path])
     run([sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_network.py', '-v'])
     for path in ('tests/test_panel.py', 'tests/test_panel_tls.py', 'tests/test_uninstaller.py'): run([sys.executable, path])
     node = shutil.which('node')
     if not node: raise RuntimeError('汇总权限检查需要 Node 20 或更高版本')
     run([node, 'tests/test_hub.mjs'])
+    run([node, 'tests/test_bootstrap.mjs'])
     print('本地检查通过；不代表真实 VPS、Cloudflare 或客户端公网验收。')
 
 

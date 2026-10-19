@@ -1,0 +1,11 @@
+name = "ip-install"
+main = "worker.js"
+compatibility_date = "2026-10-19"
+workers_dev = false
+
+# Attach an unused hostname in your own account; no private bindings needed.
+# routes = [{ pattern = "install.example.com", custom_domain = true }]
+[[rules]]
+type = "Text"
+globs = ["**/*.sh"]
+fallthrough = true

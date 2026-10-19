@@ -297,6 +297,8 @@ class NetworkTests(unittest.TestCase):
         self.assertIn('已生成两条TCP节点',text)
         self.assertGreater(text.index('当前环境不支持UDP节点。'),text.index(headers[2]))
         self.assertIn('第二条：中转家宽IP节点',text)
+        self.assertIn('第一条：直连VLESS+reality（导入链接后，请替换真实端口）',text)
+        self.assertIn('第二条：中转家宽IP节点（导入链接后，请替换真实端口）',text)
         self.assertNotIn('映射平台：将外部地址和端口填入',text)
         self.assertNotIn('需要第二条 TCP 替代入口',text)
         self.assertNotIn('53583',text)
@@ -316,6 +318,26 @@ class NetworkTests(unittest.TestCase):
         self.assertEqual(text.count('45624'),1);self.assertEqual(text.count('21479'),1);self.assertEqual(text.count('34735'),1)
         self.assertIn('不是 Hysteria2',text)
         self.assertEqual(text.count('节点链接（'),1)
+        self.assertNotIn('导入链接后，请替换真实端口',text)
+
+    def test_short_bootstrap_privilege_failure_and_cleanup(self):
+        source=(ROOT/'bootstrap/install.sh').read_text(encoding='utf-8')
+        windows_bash=pathlib.Path('C:/Program Files/Git/bin/bash.exe')
+        executable=str(windows_bash) if windows_bash.exists() else 'bash'
+        target=self.root/'download.sh'
+        mocks='''
+id() { printf '%s' "$TEST_UID"; }
+mktemp() { printf '%s' "$TEST_DOWNLOAD"; }
+curl() { local target; for target in "$@"; do :; done; printf 'partial-or-complete' > "$target"; return "$TEST_CURL_CODE"; }
+bash() { printf 'installer-ran'; return 7; }
+sudo() { printf 'sudo-ran'; return 7; }
+'''
+        for uid,curl_code,expected in [('0','0','installer-ran'),('1000','0','sudo-ran'),('0','22','')]:
+            env=dict(os.environ,TEST_UID=uid,TEST_CURL_CODE=curl_code,TEST_DOWNLOAD=target.as_posix())
+            result=subprocess.run([executable,'-c',mocks+'\n'+source],env=env,capture_output=True,text=True)
+            self.assertEqual(result.stdout,expected)
+            self.assertEqual(result.returncode,7 if curl_code=='0' else 1)
+            self.assertFalse(target.exists())
 
     def test_quiet_command_preserves_failure_and_private_diagnostics(self):
         source=(ROOT/'src/install.sh').read_text(encoding='utf-8')

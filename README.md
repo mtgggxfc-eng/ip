@@ -5,11 +5,19 @@
 
 支持 Debian / Ubuntu、systemd、x86_64 或 aarch64；住宅出口需要 `/dev/net/tun`。
 
+短安装命令（自动判断 root / sudo）：
+
+```bash
+curl -fsSL https://ip.aizoudd.ggff.net | bash
+```
+
+原始 GitHub 命令仍可用，短入口无法连接时可使用：
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mtgggxfc-eng/ip/main/jkyj.sh | { if [ "$(id -u)" -eq 0 ]; then bash; else sudo bash; fi; }
 ```
 
-**直接回车自动安装；输入 `2` 手动填写。** 自动模式不再询问各端口，使用随机空闲端口、`US`、`www.amazon.com`。已有配置会复用。
+**直接回车自动安装；输入 `2` 手动填写。** 自动模式不再询问各端口，使用随机空闲端口、`JP`、`www.amazon.com`。已有配置及已选国家会复用。短命令是公共安装入口，不附带私人汇总授权；需加入汇总时仍使用面板签发的完整专属命令。短入口源码和维护见 [docs/BOOTSTRAP.md](docs/BOOTSTRAP.md)。
 
 首次缺少外部条件时先保留配置并提示；补齐后重跑、按回车自动续装并更新输出。普通端口放行可以直接复检；随机映射需要平台接口或一次性填写脚本生成的 `/etc/residential-stack/port-mappings.json`，不能在没有来源的情况下自动推算。UUID/密码保留，客户端静态链接需重新导入。
 

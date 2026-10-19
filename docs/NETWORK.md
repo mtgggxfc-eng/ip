@@ -4,7 +4,7 @@
 
 第一次只显示一个菜单：回车自动；2 手动。可以预先设置 IP_SETUP_MODE=auto/manual 省略这个菜单。自动模式的 ask() 不读终端，不会继续询问参数。
 
-自动使用随机空闲端口、住宅国家 US、Reality 域名 www.amazon.com。手动模式能填写这些参数，以及映射、CF 令牌和域名。默认采用原生 Reality/Hysteria2，不修改用户其他服务。
+新部署自动使用随机空闲端口、住宅国家 JP、Reality 域名 www.amazon.com；已有国家不覆盖。手动模式能填写这些参数，以及映射、CF 令牌和域名。默认采用原生 Reality/Hysteria2，不修改用户其他服务。
 
 ## 2. 环境判断与连接优先级
 
