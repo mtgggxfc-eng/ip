@@ -335,7 +335,9 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
     elif exported['udp'].startswith('trojan://'):
         lines.append('第二条为 Trojan TCP 替代，不是 Hysteria2。')
     panel = (panels or pending_panels or [''])[0]
-    lines += ['', '住宅管理面板：' + (panel or 'https://外部地址:外部端口/（需填写平台映射）'),
+    unresolved = 'https://' + (state.get('external_address') or settings['public_ip']) + ':____/  【端口待检测】' + (
+        '' if state.get('external_address') else '（出口 IP 候选，入站地址需确认）')
+    lines += ['', '住宅管理面板：' + (panel or unresolved),
               '面板用户名：' + auth['username'], '面板密码：' + auth['password']]
     if panel and not panels: lines.append('面板待验证，请检查端口和证书。')
     # Only the entries actually exported through native listeners need these
@@ -357,9 +359,9 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
                       '如外部连接失败，检查平台' + ('端口映射：' if state['mode'] == 'mapped' else '入站放行：') +
                       '、'.join(dict.fromkeys(proto + ' ' + str(port) for proto, port, _ in needed)) + '。']
         elif state['mode'] == 'mapped':
-            lines += ['', '下一步：在平台后台创建以下端口映射：']
+            lines += ['', '下一步：在平台后台确认以下端口映射：']
             lines += [proto + ' ' + str(port) + '（' + name + '）' for proto, port, name in needed]
-            lines.append('然后重跑安装命令，选择 2，填写平台给出的外部地址和外部端口。')
+            lines.append('将外部地址和端口填入 ' + str(ROOT / 'port-mappings.json') + '，再重跑命令按回车即可自动更新。')
         else:
             lines += ['', '下一步：在云平台放行入站端口：' + '、'.join(dict.fromkeys(proto + ' ' + str(port) for proto, port, _ in needed)) + '。']
     elif ready:
@@ -519,20 +521,56 @@ def firewall(ports):
     return results
 
 
-def configure_mappings(state, links, settings):
-    state['external_address'] = os.environ.get('IP_EXTERNAL_ADDRESS') or ask('平台给出的外部主机名', state.get('external_address', ''))
+def configure_mappings(state, links, settings, discovered=False):
+    value = lambda label, default: default if discovered else ask(label, default)
+    state['external_address'] = os.environ.get('IP_EXTERNAL_ADDRESS') or value('平台给出的外部主机名', state.get('external_address', ''))
     for role in ('tcp', 'udp', 'home'):
         original = links.get(role, '')
         if not original or (role == 'udp' and not state['udp_available']): continue
         inside = urllib.parse.urlsplit(original).port
-        number = os.environ.get('IP_MAP_' + role.upper()) or ask(
+        number = os.environ.get('IP_MAP_' + role.upper()) or value(
             ('UDP' if role == 'udp' else 'TCP') + ' 内部端口 ' + str(inside) + ' 对应的外部端口（0 跳过直连）', str(state['mappings'].get(role, 0)))
         if not str(number).isdigit() or not 0 <= int(number) <= 65535: raise ValueError('外部端口无效')
         state['mappings'][role] = int(number)
-    state['panel_external_port'] = int(os.environ.get('IP_MAP_PANEL') or ask(
+    state['panel_external_port'] = int(os.environ.get('IP_MAP_PANEL') or value(
         '面板内部端口 ' + str(settings['panel_port']) + ' 对应的外部端口（0 跳过备用）', str(state.get('panel_external_port', 0))))
     if not 0 <= state['panel_external_port'] <= 65535: raise ValueError('面板外部端口无效')
     write(ROOT / 'network.json', state)
+
+
+def load_mapping_table(state, links, settings):
+    """Provider-neutral handoff: import only mappings of this stack's listeners."""
+    path = ROOT / 'port-mappings.json'
+    roles = {r: urllib.parse.urlsplit(uri).port for r, uri in links.items() if uri and r in ('tcp', 'home', 'udp')}
+    roles['panel'] = settings['panel_port']
+    if not path.exists():
+        table = {'external_address': state.get('external_address', ''), 'tcp': {}, 'udp': {}}
+        for role, inside in roles.items():
+            protocol = 'udp' if role == 'udp' else 'tcp'
+            table[protocol][str(inside)] = state.get('panel_external_port', 0) if role == 'panel' else state.get('mappings', {}).get(role, 0)
+        write(path, table)
+    if path.is_symlink(): raise ValueError('映射信息文件是符号链接，未读取')
+    try: table = read(path)
+    except (ValueError, TypeError): raise ValueError('port-mappings.json 不是有效 JSON，请填写外部地址和端口') from None
+    if not isinstance(table, dict): raise ValueError('port-mappings.json 必须是 JSON 对象')
+    address = table.get('external_address', '')
+    if address and (not isinstance(address, str) or not re.fullmatch(r'[a-zA-Z0-9.-]+', address)):
+        raise ValueError('port-mappings.json 的外部地址无效')
+    pending = {}
+    for role, inside in roles.items():
+        protocol = 'udp' if role == 'udp' else 'tcp'
+        mapping = table.get(protocol, {})
+        if not isinstance(mapping, dict): raise ValueError('port-mappings.json 的 tcp/udp 必须是内部端口到外部端口的表')
+        outside = mapping.get(str(inside), 0)
+        if type(outside) is not int or not 0 <= outside <= 65535: raise ValueError('port-mappings.json 的外部端口必须是 0 到 65535 的整数')
+        if outside: pending[role] = outside
+    if address: state['external_address'] = address
+    for role, outside in pending.items():
+        if role == 'panel': state['panel_external_port'] = outside
+        else: state.setdefault('mappings', {})[role] = outside
+    if address and pending: state['mapping_source'] = 'mapping-file'
+    write(ROOT / 'network.json', state)
+    return bool(address and pending)
 
 
 def air_call(token, method, path, body=None):
@@ -547,31 +585,59 @@ def air_call(token, method, path, body=None):
         raise RuntimeError('NVIDIA 平台端口操作失败，HTTP ' + str(e.code)) from None
 
 
+def air_local_mac():
+    route = json.loads(run(['ip', '-j', 'route', 'get', '1.1.1.1']).stdout)[0]
+    device = route.get('dev', '')
+    if not device or not re.fullmatch(r'[a-zA-Z0-9_.:@-]+', device): raise ValueError('无法识别默认网卡，请配置 IP_AIR_INTERFACE_ID')
+    interfaces = json.loads(run(['ip', '-j', 'link', 'show', 'dev', device]).stdout)
+    mac = str(interfaces[0].get('address', '')).lower()
+    if not re.fullmatch(r'(?:[a-f0-9]{2}:){5}[a-f0-9]{2}', mac): raise ValueError('无法识别网卡 MAC，请配置 IP_AIR_INTERFACE_ID')
+    return mac
+
+
+def resolve_air_interface(token, saved):
+    explicit = os.environ.get('IP_AIR_INTERFACE_ID') or (saved.get('interface') if saved.get('selection', 'explicit') == 'explicit' else '')
+    if explicit: return explicit, {'selection': 'explicit'}
+    mac = air_local_mac()
+    found = air_call(token, 'GET', 'simulations/nodes/interfaces/?mac_address=' + urllib.parse.quote(mac)).get('results', [])
+    matches = [item for item in found if str(item.get('mac_address', '')).lower() == mac]
+    if len(matches) != 1: raise ValueError('平台网卡无法唯一匹配本机，请配置 IP_AIR_INTERFACE_ID；未改动平台服务')
+    return matches[0]['id'], {'selection': 'mac', 'mac_address': mac}
+
+
 def auto_air_mappings(state, links, settings):
     saved = read(ROOT / 'air.json')
     token = os.environ.get('IP_AIR_API_TOKEN') or saved.get('token')
-    interface = os.environ.get('IP_AIR_INTERFACE_ID') or saved.get('interface')
-    if not token or not interface:
-        return '未提供 NVIDIA 平台 API 授权及接口编号，无法自动建立云端映射；将尝试本机 CF 隧道。'
+    if not token: return False
+    state.setdefault('mappings', {})
+    write(ROOT / 'air.json', {**saved, 'token': token})
+    interface, identity = resolve_air_interface(token, saved)
     if not re.fullmatch(r'[a-fA-F0-9-]{36}', interface): raise ValueError('NVIDIA 接口编号格式无效')
-    write(ROOT / 'air.json', {'token': token, 'interface': interface})
+    write(ROOT / 'air.json', {'token': token, 'interface': interface, **identity})
     base = 'simulations/nodes/interfaces/services/'
     roles = {r: urllib.parse.urlsplit(links[r]).port for r in ('tcp', 'home') if links.get(r)}
     roles['panel'] = settings['panel_port']
     for role, inside in roles.items():
         existing = air_call(token, 'GET', base + '?interface=' + interface + '&node_port=' + str(inside)).get('results', [])
-        service = next((s for s in existing if s.get('interface') == interface and s.get('node_port') == inside), None)
+        matches = [s for s in existing if s.get('interface') == interface and s.get('node_port') == inside]
+        if len(matches) > 1: raise ValueError('同一内部端口有多个平台映射，请先在平台确认；未修改这些服务')
+        service = matches[0] if matches else None
         if not service:
             service = air_call(token, 'POST', base, {'interface': interface, 'node_port': inside,
                 'name': 'ip-' + state['instance'] + '-' + role, 'service_type': 'HTTPS' if role == 'panel' else 'OTHER'})
             state.setdefault('air_services', {})[service['id']] = {'name': service['name'], 'node_port': inside, 'interface': interface}
             write(ROOT / 'network.json', state)
+        if service.get('interface') != interface or service.get('node_port') != inside: raise ValueError('平台返回的映射不属于请求的本机端口')
         if service.get('worker_port') and service.get('worker_fqdn'):
             state['external_address'] = service['worker_fqdn']
             if role == 'panel': state['panel_external_port'] = service['worker_port']
             else: state['mappings'][role] = service['worker_port']
+        elif role == 'panel': state['panel_external_port'] = 0
+        else: state['mappings'][role] = 0
+    state['mapping_source'] = 'nvidia-api'
+    state['mappings_updated_at'] = int(time.time())
     write(ROOT / 'network.json', state)
-    return '已通过 NVIDIA 平台 API 核对或创建 TCP 映射；UDP 不作可用假设。'
+    return True
 
 
 def apply():
@@ -583,10 +649,11 @@ def apply():
     candidates = {role: [links.get(role, '')] for role in ('tcp', 'udp', 'home')}
     errors, panel_urls = [], []
     if state['mode'] == 'mapped':
-        try: auto_air_mappings(state, links, settings)
+        discovered = load_mapping_table(state, links, settings)
+        try: discovered = auto_air_mappings(state, links, settings) or discovered
         except (OSError, RuntimeError, ValueError, urllib.error.URLError) as exc:
             errors.append(safe_error(exc))
-        configure_mappings(state, links, settings)
+        configure_mappings(state, links, settings, discovered=discovered)
         candidates = {role: [mapped_link(links.get(role), state.get('external_address'), state['mappings'].get(role))]
                       for role in ('tcp', 'udp', 'home')}
         if not state['udp_available']: candidates['udp'] = []

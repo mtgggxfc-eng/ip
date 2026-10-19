@@ -8,7 +8,7 @@
 |---|---|---|
 | Python / Bash 语法 | AST、Bash -n | 本地通过，不执行安装 |
 | 构建一致性 | build.py 重建、SHA256 对比 | 固定源码可重复生成入口和页面 |
-| 网络与权限 | tests/test_network.py | 25 项：原 22 项，加映射未知时原始链接保留并限制输出长度、CF 正常时备用端口仅提示一次、quiet 隐藏明细且保留失败码；验证状态仍与生成配置隔离 |
+| 网络与权限 | tests/test_network.py | 30 项：原 25 项，加通用映射表两次读取/更新、MAC 唯一匹配、授权平台刷新并复用已有服务、具体面板地址+未知端口标记、管道提前退出不产生 broken pipe；平台操作使用模拟 API |
 | 本机面板 | tests/test_panel.py | 未登录拒绝、状态/候选/日志、国家、强制换 IP、轮询、原生与 WS 端口同步、服务失败回滚 |
 | 面板 TLS | tests/test_panel_tls.py | 用临时证书验证公开 TLS 加载与内部 loopback HTTP |
 | 卸载 | tests/test_uninstaller.py | 临时文件系统和模拟系统命令，保留原服务/共享证书、只清理自有规则、重复卸载、冲突中止 |
@@ -53,7 +53,7 @@ python tests/integration_ws.py --sing-box /path/to/sing-box --xray /path/to/xray
 1. cloudflared 在真实 VPS 的运行、隧道连接及每个节点子域名证书传播；本轮已测真实资源 API，但未启动测试隧道连接器。
 2. CF 边缘至 VPS 的三条 WS 链路，从外部客户端实际握手和出口；本地 origin 测试不能替代该项。
 3. Certbot DNS/私有挑战 hook 及自动续期；当前没有为用户域名申请新版证书。
-4. NVIDIA Services API 的真实 TCP 映射；缺 API Bearer/interface UUID 时只能给出后台提示，不能说已自动开放。
+4. NVIDIA Services API 的真实 TCP 映射及 MAC 唯一匹配；无 API 授权时不能读取平台随机映射，通用映射表是用户/平台工具提供数据，不等于脚本自行发现。
 5. 新版在授权试验 VPS 的完整安装、重复执行、重启、部分失败、卸载；目前没有执行新版部署。
 6. 从用户自己的网络，以实际 v2rayN 导入最终链接，测试证书、出口、持续连接与速度。
 7. 至少两台机器真实管理隔离：改一台国家/端口/出口，另一台配置、服务、日志不变。

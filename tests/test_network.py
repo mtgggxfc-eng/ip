@@ -103,9 +103,83 @@ class NetworkTests(unittest.TestCase):
         with patch.object(n.shutil, 'which', return_value='/bin/ufw'), patch.object(n, 'run', side_effect=RuntimeError('failed')):
             self.assertFalse(n.firewall([('tcp', 443)])[0]['host_opened'])
 
-    def test_cloud_api_requires_explicit_interface(self):
+    def test_cloud_api_requires_authorization(self):
         with patch.dict(os.environ, {}, clear=True), patch.object(n, 'air_call', side_effect=AssertionError('no calls')):
-            self.assertIn('未提供', n.auto_air_mappings({}, {}, {'panel_port': 4444}))
+            self.assertFalse(n.auto_air_mappings({}, {}, {'panel_port': 4444}))
+
+    def test_mapping_file_refreshes_ports_without_prompting(self):
+        state={'mode':'mapped','mappings':{}}
+        native={'tcp':'vless://test@192.0.2.10:21088','home':'vless://home@192.0.2.10:47956'}
+        settings={'panel_port':45062}
+        self.assertFalse(n.load_mapping_table(state,native,settings))
+        path=self.root/'port-mappings.json';table=n.read(path)
+        table.update(external_address='worker.example.com',tcp={'21088':11001,'47956':11002,'45062':11003})
+        n.write(path,table)
+        before=dict(native)
+        for offset in (0,100):
+            table['tcp']['21088']=11001+offset;n.write(path,table)
+            self.assertTrue(n.load_mapping_table(state,native,settings))
+            with patch.object(n,'ask',side_effect=AssertionError('no questions')):
+                n.configure_mappings(state,native,settings,discovered=True)
+            self.assertEqual(state['mappings']['tcp'],11001+offset)
+            self.assertEqual(state['panel_external_port'],11003)
+        self.assertEqual(native,before)
+
+    def test_platform_interface_discovery_requires_unique_mac(self):
+        identifier='11111111-1111-1111-1111-111111111111'
+        with patch.dict(os.environ,{},clear=True),patch.object(n,'air_local_mac',return_value='52:54:00:01:02:03'), \
+             patch.object(n,'air_call',return_value={'results':[{'id':identifier,'mac_address':'52:54:00:01:02:03'}]}) as call:
+            result,identity=n.resolve_air_interface('test-token',{})
+            self.assertEqual(result,identifier);self.assertEqual(identity['selection'],'mac')
+            self.assertIn('mac_address=',call.call_args.args[2])
+        with patch.dict(os.environ,{},clear=True),patch.object(n,'air_local_mac',return_value='52:54:00:01:02:03'), \
+             patch.object(n,'air_call',return_value={'results':[]}):
+            with self.assertRaisesRegex(ValueError,'无法唯一匹配'):n.resolve_air_interface('test-token',{})
+
+    def test_authorized_provider_refresh_reuses_existing_mappings(self):
+        identifier='11111111-1111-1111-1111-111111111111'
+        n.write(self.root/'air.json',{'token':'test','interface':identifier})
+        native={'tcp':'vless://test@192.0.2.10:21088','home':'vless://home@192.0.2.10:47956'}
+        state={'instance':'test','mappings':{}}
+        revision=[0]
+        def provider(token,method,path,*args):
+            self.assertEqual(method,'GET')
+            inside=int(n.urllib.parse.parse_qs(n.urllib.parse.urlsplit(path).query)['node_port'][0])
+            return {'results':[{'id':'existing-'+str(inside),'interface':identifier,'node_port':inside,
+                               'worker_port':inside+revision[0],'worker_fqdn':'worker.example.com'}]}
+        with patch.dict(os.environ,{},clear=True),patch.object(n,'air_call',side_effect=provider):
+            self.assertTrue(n.auto_air_mappings(state,native,{'panel_port':45062}))
+            revision[0]=10
+            self.assertTrue(n.auto_air_mappings(state,native,{'panel_port':45062}))
+        self.assertEqual(state['mappings']['tcp'],21098)
+        self.assertEqual(state['panel_external_port'],45072)
+        self.assertFalse(state.get('air_services'))
+        self.assertTrue(native['tcp'].startswith('vless://test@'))
+
+    def test_panel_hint_fills_known_address_and_leaves_only_port_blank(self):
+        settings={'public_ip':'192.0.2.10','panel_port':45062}
+        for state,expected in [({'mode':'mapped','mappings':{}},'https://192.0.2.10:____/'),
+                               ({'mode':'mapped','mappings':{},'external_address':'worker.example.com'},'https://worker.example.com:____/')]:
+            with patch.dict(os.environ,{},clear=True):
+                result=n.concise_result(state,settings,{'username':'test','password':'test-password'},{},{},{},[],[],True,[])
+            self.assertIn(expected,result)
+            self.assertIn('【端口待检测】',result)
+            self.assertNotIn('https://外部地址',result)
+
+    def test_pipe_install_early_exit_drains_input_without_broken_pipe(self):
+        source=(ROOT/'src/install.sh').read_text(encoding='utf-8')
+        drain=next(line for line in source.splitlines() if line.startswith('if [[ -z "${BASH_SOURCE[0]:-}"'))
+        windows_bash=pathlib.Path('C:/Program Files/Git/bin/bash.exe')
+        bash=str(windows_bash) if windows_bash.exists() else 'bash'
+        payload=(drain+'\nexit 2\n#'+'x'*1048576+'\n').encode()
+        process=subprocess.Popen([bash],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        try:
+            process.stdin.write(payload);process.stdin.close()
+            self.assertEqual(process.wait(timeout=10),2)
+            self.assertEqual(process.stderr.read(),b'')
+        finally:
+            if process.poll() is None:process.kill();process.wait()
+            process.stdout.close();process.stderr.close()
 
     def test_public_user_does_not_join_private_hub(self):
         with patch.dict(os.environ, {}, clear=True), patch.object(n, 'hub_request', side_effect=AssertionError('no calls')):

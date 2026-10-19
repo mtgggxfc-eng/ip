@@ -58,7 +58,25 @@ HTTP-01 只能验证公网 80；内部 80 映射到公网随机端口不满足�
 
 本机命令成功不等于云端已经放行；nftables 特殊链、云安全组、多层防火墙仍可能拦截。公开入口实测是另一项证据。
 
-NVIDIA 平台：仅当有 API Bearer 授权和明确的 interface UUID，才通过官方 API 查询/新增 TCP 服务。复用已有同接口同内部端口的服务，不修改它；只记录和清理自己新建的服务。没有 UDP 字段，因此不自动创建所谓 UDP Other 服务。缺少接口编号时，不猜测或改动账号里其他模拟环境。
+NVIDIA 是可选的平台适配器，不是通用流程的前提。配置 API Bearer 授权后，可按默认网卡 MAC 唯一匹配接口，也可显式指定 interface UUID；匹配不唯一就停止平台写入。每次重跑查询当前映射，复用已有同接口同内部端口的服务，不修改它；只记录和清理自己新建的服务。没有 UDP 字段，不自动创建所谓 UDP Other 服务。没有配置此适配器的授权时，不向它请求或询问该平台专属参数。
+
+### 通用的首次部署与自动续装
+
+第一遍自动部署能完成的组件，保留已生成配置，并提示缺少的外部条件。普通公网端口由用户在云平台放行后，第二遍按回车即可重新检测；本机握手失败不再直接中止后续信息输出。关键环境/配置错误仍会停止并提供日志。
+
+随机 NAT 映射不能由内部端口推算出来。平台适配器有有效授权时自动读取；其他平台可一次性把映射结果写进自动生成的 /etc/residential-stack/port-mappings.json，之后每次重跑自动读取，不能假称无需任何映射来源就能发现任意厂商随机端口。
+
+示例（真实内部端口由脚本自动填好，用户只补外部地址和外部端口；0 表示未知）：
+
+```json
+{"external_address":"worker.example.com","tcp":{"21088":17757,"47956":15083,"45062":18676},"udp":{}}
+```
+
+此文件是厂商无关的交接表，不含 API 凭据。映射变动后更新该文件，再自动重跑。有效平台 API 的最新查询覆盖文件中的旧值，显式环境变量最后覆盖。重新生成的链接和 /root/three-nodes-info.txt、three-nodes-links.txt 会更新，UUID、密码、内部监听端口保留；已导入客户端的静态 URI 需重新导入，不会凭空同步到客户端。
+
+未知面板端口显示 `https://具体地址:____/  【端口待检测】`。已知平台外部主机名时直接使用它；只有出口 IP 时作为候选填入，并注明入站地址仍需确认。不能输出字面量“外部地址”或把未知端口默认为 443。
+
+接口依据：[按 MAC 列出网卡](https://docs.nvidia.com/dsx-air/api-reference/interfaces/api-v-3-simulations-nodes-interfaces-list/)、[读取已分配的外部主机与端口](https://docs.nvidia.com/dsx-air/api-reference/services/api-v-3-simulations-nodes-interfaces-services-list/)。
 
 其他厂商目前没有通用安全组写入适配。没有平台授权时，终端列出“协议 + 内部端口 + 需要后台放行/映射”，不能声称已自动开云端端口。普通 VPS 需要开放的是入站；住宅连接还需要 DNS/HTTPS 和候选 OpenVPN 指定端口的出站。未限制出站时无须额外操作。
 
@@ -77,7 +95,7 @@ NVIDIA 平台：仅当有 API Bearer 授权和明确的 interface UUID，才通�
 | IP_MAP_TCP、IP_MAP_UDP、IP_MAP_HOME | 三个原生入口的外部端口；0 跳过 |
 | IP_MAP_PANEL | 面板外部端口；0 不配置 DNS 备用 |
 | IP_AIR_API_TOKEN | NVIDIA API 接受的 Bearer 令牌，不是未经交换的任意 NGC Key |
-| IP_AIR_INTERFACE_ID | 明确的 NVIDIA 外部接口 UUID |
+| IP_AIR_INTERFACE_ID | 可选 NVIDIA 外部接口 UUID；不填则在有授权时按本机 MAC 唯一匹配 |
 | IP_HUB_URL | 自己的汇总入口；默认无 |
 | IP_PRIVATE_RESOURCES | 设置汇总地址时默认 1：后台代建；0：使用部署者自己的 CF 资源，再登记后台 |
 | IP_HUB_ENROLLMENT | 管理员签发、15 分钟有效的一次性接入码 |

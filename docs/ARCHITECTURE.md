@@ -54,6 +54,7 @@ flowchart LR
 | settings.json | 面板/内部 API 端口、住宅国家/策略、核心路径、证书路径、最终面板 URL |
 | auth.json | 面板与 SOCKS 随机凭据 |
 | network.json | 实例编号、模式、外部映射、WS 随机凭据、自己创建的云资源账本 |
+| port-mappings.json | 通用平台映射交接表，内部端口由脚本填好，用户/平台工具填外部地址和端口；重跑自动读取 |
 | cloudflare.json、tunnel.token、dns-credentials.ini | CF API、隧道、DNS 验证授权 |
 | air.json | 可选 NVIDIA API 授权与明确的接口编号 |
 | hub.json | 可选汇总 URL、机器编号、仅限自身的机器令牌；无管理员密码 |

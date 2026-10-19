@@ -11,6 +11,8 @@ curl -fsSL https://raw.githubusercontent.com/mtgggxfc-eng/ip/main/jkyj.sh | { if
 
 **直接回车自动安装；输入 `2` 手动填写。** 自动模式不再询问各端口，使用随机空闲端口、`US`、`www.amazon.com`。已有配置会复用。
 
+首次缺少外部条件时先保留配置并提示；补齐后重跑、按回车自动续装并更新输出。普通端口放行可以直接复检；随机映射需要平台接口或一次性填写脚本生成的 `/etc/residential-stack/port-mappings.json`，不能在没有来源的情况下自动推算。UUID/密码保留，客户端静态链接需重新导入。
+
 | 环境 | 第一条 | 第二条 | 第三条 |
 |---|---|---|---|
 | 公网端口可用 | VLESS Reality TCP | Hysteria2 UDP | 住宅出口 Reality |
