@@ -317,7 +317,7 @@ def generated_exports(candidates, selected, native_links=None):
 def concise_result(state, settings, auth, native, exported, selected, panels, pending_panels, hub_ok, port_report):
     """Show generated configuration and the next action once. Details live in logs."""
     roles = ('tcp', 'udp', 'home')
-    names = {'tcp': 'TCP 节点', 'udp': '第二条节点', 'home': '住宅节点'}
+    names = {'tcp': 'TCP 直连节点', 'udp': 'Hysteria2 节点', 'home': '住宅IP节点'}
     count = sum(bool(exported.get(r)) for r in roles)
     ready = len(selected) == 3 and panels and hub_ok
     lines = ['部署结果：' + ('三个节点检测通过。' if ready else '已生成 ' + str(count) + ' 个节点，仍有设置待完成。')]
@@ -329,16 +329,22 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
         lines.append('下方原始链接的地址和端口需改为平台分配的外部地址、外部端口。')
     waiting = [names[r] for r in roles if exported.get(r) and r not in selected]
     if waiting: lines.append('状态：已生成，公网检测未通过（' + '、'.join(waiting) + '）。')
-    if not exported.get('udp'):
-        lines.append('第二条未生成：未确认 UDP 支持，也未配置可用的 TCP 替代入口。' if not state.get('udp_available') else '第二条未生成，请查看详细日志。')
-    elif exported['udp'].startswith('trojan://'):
+    if not exported.get('udp') and state.get('udp_available'):
+        lines.append('Hysteria2 节点未生成，请查看详细日志。')
+    elif exported.get('udp', '').startswith('trojan://'):
         lines.append('第二条为 Trojan TCP 替代，不是 Hysteria2。')
     panel = (panels or pending_panels or [''])[0]
-    unresolved = 'https://' + (state.get('external_address') or settings['public_ip']) + ':____/  【端口待检测】' + (
-        '' if state.get('external_address') else '（出口 IP 候选，入站地址需确认）')
+    unresolved = 'https://' + (state.get('external_address') or settings['public_ip']) + ':' + str(settings['panel_port']) + '  【请将' + str(settings['panel_port']) + '端口，替换成后台端口地址】'
+    if not panel and not state.get('external_address'):
+        lines.append('面板显示出口 IP 候选；如平台提供独立入站地址，请同时替换地址。')
     panel_lines = ['住宅管理面板：' + (panel or unresolved),
                    '面板用户名：' + auth['username'], '面板密码：' + auth['password']]
     if panel and not panels: lines.append('面板待验证，请检查端口和证书。')
+    if not panels:
+        cert_hint = ('已配置域名证书，请检查域名入口及续期日志。' if state.get('certificate_mode') == 'domain' else
+                     '随机端口映射不能完成 IP 证书验证，需使用已授权的域名或隧道入口。' if state['mode'] == 'mapped' else
+                     '请放行公网 TCP 80 后重跑命令申请证书。')
+        lines.append('面板证书：尚未验证受信任；' + cert_hint)
     # Separate required native listeners from optional direct backups for CF.
     native_roles = [r for r in roles if native.get(r) and (exported.get(r) == native[r] or
                     state['mode'] == 'mapped' and state.get('external_address') and state.get('mappings', {}).get(r) and
@@ -350,18 +356,16 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
         uri = urllib.parse.urlsplit(native[r])
         proto = 'UDP' if uri.scheme in ('hysteria2', 'hy2') else 'TCP'
         needed.append((proto, uri.port, names[r]))
-    if panel_native: needed.append(('TCP', settings['panel_port'], '住宅面板'))
+    if panel_native: needed.append(('TCP', settings['panel_port'], '管理面板'))
+    if state['mode'] == 'direct' and not panels and (ROOT / 'renew-panel-cert.sh').exists() and state.get('certificate_mode') != 'domain':
+        needed.append(('TCP', 80, '证书申请与自动续期'))
     actions = []
     if needed:
         if ready:
-            actions += ['复制节点导入客户端。', '【请在后台开放端口】（外部连接失败时检查）',
-                        '、'.join(dict.fromkeys(proto + ' ' + str(port) for proto, port, _ in needed))]
-        elif state['mode'] == 'mapped':
-            actions += ['【请在后台开放端口】']
-            actions += [proto + ' ' + str(port) + '（' + name + '）' for proto, port, name in needed]
-            actions.append('映射平台：将外部地址和端口填入 ' + str(ROOT / 'port-mappings.json') + '，再重跑命令按回车自动更新。')
+            actions += ['复制节点导入客户端。', '【请在后台开放端口】重要！（外部连接失败时检查）']
         else:
-            actions += ['【请在后台开放端口】', '、'.join(dict.fromkeys(proto + ' ' + str(port) for proto, port, _ in needed))]
+            actions += ['【请在后台开放端口】重要！']
+        actions += ['请开放' + proto + '端口 ' + str(port) + '（' + name + '）' for proto, port, name in needed]
     elif ready:
         actions += ['复制节点导入客户端；当前隧道入口无需新增公网入站映射。']
     else:
@@ -381,8 +385,10 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
     if private and not hub_ok:
         actions.append('汇总接入未完成：检查面板和隧道后重跑原命令。' if read(ROOT / 'hub.json').get('machine_token') else
                      '私人授权未完成：从汇总面板重新取得有效命令后重试。')
-    elif state['mode'] == 'mapped' and not exported.get('udp'):
-        actions.append('需要第二条 TCP 替代入口：重跑命令选 2，填写自己的 CF 域名和令牌。')
+    if not state.get('udp_available') and not exported.get('udp'):
+        actions += ['-' * 60, '当前环境不支持UDP节点。']
+        if exported.get('tcp') and exported.get('home'):
+            actions += ['已生成两条TCP节点', '第一条：直连VLESS+reality', '第二条：中转家宽IP节点']
     log = os.environ.get('IP_INSTALL_LOG') or str(ROOT / 'deployment-details.txt')
     lines += ['', '详细日志：' + log]
     # Decorations surround sections, never prefix URIs, so multi-line import
@@ -667,6 +673,8 @@ def apply():
         if links.get(role): ports.append(('udp' if role == 'udp' else 'tcp', urllib.parse.urlsplit(links[role]).port))
     # Open/list the panel listener even when its cloud-side mapping is created later.
     ports.append(('tcp', settings['panel_port']))
+    if state['mode'] == 'direct' and state.get('certificate_mode') != 'domain' and (ROOT / 'renew-panel-cert.sh').exists():
+        ports.append(('tcp', 80))
     port_report = firewall(ports)
     write(ROOT / 'firewall-ports.json', ports)
     firewall_unit = UNITS / 'residential-firewall.service'

@@ -68,6 +68,18 @@ ROOT=/etc/residential-stack
 CB=/opt/residential-certbot/bin/certbot
 IP="$(python3 -c 'import json; print(json.load(open("/etc/residential-stack/settings.json"))["public_ip"])')"
 COMMON=(--config-dir "$ROOT/acme" --work-dir "$ROOT/acme-work" --logs-dir "$ROOT/acme-logs")
+# Reuse the scoped firewall adapter for initial issuance and timer renewals.
+# Cloud security groups still need the owner's authorization.
+python3 - <<'PY'
+import pathlib,runpy
+p=pathlib.Path('/etc/residential-stack/network-adapter.py')
+if p.is_file():
+    try:
+        result=runpy.run_path(str(p))['firewall']([('tcp',80)])
+        if not all(item['host_opened'] for item in result): print('证书验证的本机 TCP 80 放行失败，请检查系统防火墙。')
+    except (OSError,RuntimeError,ValueError):
+        print('证书验证端口未能自动放行，请检查系统防火墙。')
+PY
 if [[ -f "$ROOT/acme/renewal/residential-panel-ip.conf" ]]; then
   "$CB" renew --cert-name residential-panel-ip --non-interactive --no-random-sleep-on-renew "${COMMON[@]}" --deploy-hook "$ROOT/apply-panel-cert.sh"
 else

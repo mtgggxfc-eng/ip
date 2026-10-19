@@ -35,6 +35,7 @@ trap 'error_report $LINENO' ERR
 die() { printf '安装停止：%s\n' "$*" >&2; exit 1; }
 note() { printf '\n==> %s\n' "$*"; }
 quiet() { "$@" >>"$IP_INSTALL_LOG" 2>&1; }
+live() { "$@" 2>&1 | tee -a "$IP_INSTALL_LOG"; }
 valid_port() { [[ "$1" =~ ^[0-9]+$ ]] && (( 1 <= 10#$1 && 10#$1 <= 65535 )); }
 port_free() {
   local port=$1 proto=$2
@@ -70,6 +71,7 @@ ask_port() {
 
 upgrade_panel() {
   local updater
+  note '正在更新住宅面板并检查 HTTPS 证书…'
   updater="$(mktemp)"
   printf '%s' '__UPDATER_B64__' | base64 -d > "$updater"
   if ! IP_PUBLIC="$PUBLIC_IP" IP_LINK_TCP="$1" IP_LINK_UDP="$2" IP_LINK_HOME="$3" quiet bash "$updater"; then
@@ -216,8 +218,10 @@ fi
 STAGE='安装基础环境'
 note "$STAGE"
 export DEBIAN_FRONTEND=noninteractive
-quiet apt-get update -q
-quiet apt-get install -y ca-certificates curl python3 openssl iproute2 iptables openvpn cron
+live apt-get update -q
+printf '软件源更新完成，正在安装所需组件…\n'
+live apt-get install -y ca-certificates curl python3 openssl iproute2 iptables openvpn cron
+printf '基础环境安装完成。\n'
 
 STAGE='确认节点参数'
 USED_PORTS=()
@@ -321,7 +325,7 @@ RestartSec=5
 WantedBy=multi-user.target
 UNIT
 quiet systemctl daemon-reload
-quiet systemctl enable --now residential-panel.service
+live systemctl enable --now residential-panel.service
 PANEL_READY=0
 for _ in {1..10}; do
   if curl -ksSf --max-time 3 -u "$PANEL_USER:$PANEL_PASS" "https://127.0.0.1:$PANEL_PORT/api/config" >/dev/null 2>&1; then
@@ -331,7 +335,7 @@ for _ in {1..10}; do
   sleep 1
 done
 [[ "$PANEL_READY" == 1 ]] || die '独立住宅面板 API 验证失败；请查看 residential-panel.service 日志。'
-quiet systemctl enable --now residential-agent.service
+live systemctl enable --now residential-agent.service
 for _ in {1..20}; do
   port_free "$SOCKS_PORT" tcp || break
   sleep 1
@@ -347,7 +351,8 @@ if [[ ! -x "$SING_BOX" ]]; then
   case "$(uname -m)" in x86_64) SB_ARCH=amd64 ;; aarch64) SB_ARCH=arm64 ;; esac
   ARCHIVE="$(mktemp)"
   RELEASE="https://github.com/SagerNet/sing-box/releases/download/v1.14.1/sing-box-1.14.1-linux-${SB_ARCH}.tar.gz"
-  if quiet curl -fL --retry 3 --connect-timeout 15 --max-time 120 "$RELEASE" -o "$ARCHIVE"; then
+  printf '正在下载节点程序，完成后校验官方文件摘要…\n'
+  if live curl -fL --retry 3 --connect-timeout 15 --max-time 120 "$RELEASE" -o "$ARCHIVE"; then
     if python3 - "$ARCHIVE" "$SB_ARCH" <<'PY'
 import hashlib,json,pathlib,sys,urllib.request
 try:

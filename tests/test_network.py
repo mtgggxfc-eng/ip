@@ -156,14 +156,15 @@ class NetworkTests(unittest.TestCase):
         self.assertFalse(state.get('air_services'))
         self.assertTrue(native['tcp'].startswith('vless://test@'))
 
-    def test_panel_hint_fills_known_address_and_leaves_only_port_blank(self):
+    def test_panel_hint_uses_internal_port_with_replacement_notice(self):
         settings={'public_ip':'192.0.2.10','panel_port':45062}
-        for state,expected in [({'mode':'mapped','mappings':{}},'https://192.0.2.10:____/'),
-                               ({'mode':'mapped','mappings':{},'external_address':'worker.example.com'},'https://worker.example.com:____/')]:
+        for state,expected in [({'mode':'mapped','mappings':{}},'https://192.0.2.10:45062'),
+                               ({'mode':'mapped','mappings':{},'external_address':'worker.example.com'},'https://worker.example.com:45062')]:
             with patch.dict(os.environ,{},clear=True):
                 result=n.concise_result(state,settings,{'username':'test','password':'test-password'},{},{},{},[],[],True,[])
             self.assertIn(expected,result)
-            self.assertIn('【端口待检测】',result)
+            self.assertIn('【请将45062端口，替换成后台端口地址】',result)
+            self.assertNotIn('____',result)
             self.assertNotIn('https://外部地址',result)
 
     def test_pipe_install_early_exit_drains_input_without_broken_pipe(self):
@@ -240,6 +241,7 @@ class NetworkTests(unittest.TestCase):
     def test_closed_ports_keep_generated_links_panel_and_port_list(self):
         import types
         binary=self.root/'sing-box';binary.touch()
+        (self.root/'renew-panel-cert.sh').touch()
         n.write(self.root/'network.json',{'mode':'direct','udp_available':True})
         settings={'public_ip':'192.0.2.10','panel_port':30443,'proxy_port':30101,'sing_box_bin':str(binary)}
         n.write(self.root/'settings.json',settings)
@@ -259,9 +261,12 @@ class NetworkTests(unittest.TestCase):
         self.assertEqual((self.root/'three-nodes-links.txt').read_text().splitlines(),list(links.values()))
         self.assertEqual(n.read(self.root/'links.json'),dict.fromkeys(links,''))
         self.assertIn(('tcp',30443),ports.call_args.args[0])
+        self.assertIn(('tcp',80),ports.call_args.args[0])
+        self.assertIn(['tcp',80],n.read(self.root/'firewall-ports.json'))
         summary=(self.root/'three-nodes-info.txt').read_text(encoding='utf-8')
         self.assertIn('https://192.0.2.10:30443/',summary)
         self.assertIn('已生成，公网检测未通过',summary)
+        self.assertIn('请开放TCP端口 80（证书申请与自动续期）',summary)
         self.assertNotIn('住宅代理内部端口',summary)
         detail=(self.root/'deployment-details.txt').read_text(encoding='utf-8')
         self.assertIn('住宅代理内部端口 30101',detail)
@@ -282,16 +287,21 @@ class NetworkTests(unittest.TestCase):
         for header,title in zip(headers,('① 节点链接','② 面板信息','③ 操作提醒')):
             self.assertIn(title,header)
         self.assertLess(text.index('详细日志：'),text.index(headers[0]))
-        self.assertLess(text.index('第二条未生成'),text.index(headers[0]))
+        self.assertLess(text.index('面板证书：'),text.index(headers[0]))
         self.assertEqual(text.count('╚════════════════════════════════════════════╝'),3)
         self.assertEqual(text.rstrip().splitlines()[-1],'╚════════════════════════════════════════════╝')
         self.assertIn(native['tcp'],text.splitlines());self.assertIn(native['home'],text.splitlines())
         self.assertNotIn('下一步：在平台后台创建以下端口映射：',text)
-        self.assertEqual(text.count('21479'),1)
-        self.assertIn('第二条未生成',text)
+        self.assertIn('请开放TCP端口 21479（管理面板）',text)
+        self.assertIn('当前环境不支持UDP节点。',text)
+        self.assertIn('已生成两条TCP节点',text)
+        self.assertGreater(text.index('当前环境不支持UDP节点。'),text.index(headers[2]))
+        self.assertIn('第二条：中转家宽IP节点',text)
+        self.assertNotIn('映射平台：将外部地址和端口填入',text)
+        self.assertNotIn('需要第二条 TCP 替代入口',text)
         self.assertNotIn('53583',text)
         self.assertNotIn('NVIDIA',text)
-        self.assertLess(len(text.splitlines()),35)
+        self.assertLess(len(text.splitlines()),40)
 
     def test_working_cf_summary_lists_optional_native_ports_once(self):
         state={'mode':'mapped','udp_available':False,'mappings':{},'private_hosts':{'panel':'panel.example.com'}}
@@ -318,6 +328,12 @@ class NetworkTests(unittest.TestCase):
         self.assertEqual(result.returncode,7)
         self.assertEqual(result.stdout,'');self.assertEqual(result.stderr,'')
         self.assertIn('detail',log.read_text());self.assertIn('problem',log.read_text())
+        live=next(line for line in source.splitlines() if line.startswith('live()'))
+        script='set -o pipefail\n'+live+'\nIP_INSTALL_LOG="$1"\nlive bash -c \'echo progress; echo failed >&2; exit 7\'\n'
+        result=subprocess.run([bash,'-c',script,'live-test',str(log)],capture_output=True,text=True)
+        self.assertEqual(result.returncode,7)
+        self.assertIn('progress',result.stdout);self.assertIn('failed',result.stdout)
+        self.assertIn('progress',log.read_text());self.assertIn('failed',log.read_text())
 
     def test_unmapped_host_never_exports_egress_ip_as_incoming_address(self):
         state={'mode':'mapped','udp_available':False,'mappings':{}}

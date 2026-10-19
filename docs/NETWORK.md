@@ -43,6 +43,8 @@ CF 隧道不是专线。延迟、速度、地区可达性、CF 服务条款和�
 
 HTTP-01 只能验证公网 80；内部 80 映射到公网随机端口不满足条件。DNS-01 不需要公网 80，但需要自己的域名和 DNS 授权，不能申请 IP 证书。DNS 证书用 Certbot/dns-cloudflare 5.4.0、独立配置目录。域名模式保留续期脚本，避免再次执行被 IP 证书脚本覆盖。
 
+普通公网的 IP 证书首次申请及定时续期复用项目防火墙适配器，尝试放行本机 TCP 80（UFW/firewalld/iptables），并把 80 纳入项目开机端口规则。云平台安全组仍需用户放行公网 TCP 80。映射机器不因此尝试为共享出口 IP 申请证书；未配置授权域名/隧道时，内部临时证书的浏览器警告无法由脚本消除。输出“尚未验证受信任”不等于证书一定自签，也可能是入口未放行。
+
 自动切换目前发生在安装/再次执行时，并非持续的跨入口故障切换服务。独立隧道会自行重连；没有承诺同一个浏览器 URL 可在任意 CF 故障时透明切到直连。CF API 或同一 DNS 提供商故障时，两种方式可能同时受影响。
 
 参考：[验证方式](https://letsencrypt.org/docs/challenge-types/)、[IP 证书](https://letsencrypt.org/2026/03/11/shorter-certs-certbot)、[CF 连接检测](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/troubleshoot-tunnels/connectivity-prechecks/)。
@@ -74,7 +76,7 @@ NVIDIA 是可选的平台适配器，不是通用流程的前提。配置 API Be
 
 此文件是厂商无关的交接表，不含 API 凭据。映射变动后更新该文件，再自动重跑。有效平台 API 的最新查询覆盖文件中的旧值，显式环境变量最后覆盖。重新生成的链接和 /root/three-nodes-info.txt、three-nodes-links.txt 会更新，UUID、密码、内部监听端口保留；已导入客户端的静态 URI 需重新导入，不会凭空同步到客户端。
 
-未知面板端口显示 `https://具体地址:____/  【端口待检测】`。已知平台外部主机名时直接使用它；只有出口 IP 时作为候选填入，并注明入站地址仍需确认。不能输出字面量“外部地址”或把未知端口默认为 443。
+未知外部面板端口时，地址中填真实内部端口，例如 `https://192.0.2.10:39163  【请将39163端口，替换成后台端口地址】`。已知平台外部主机名时使用它；只有出口 IP 时在结果框前注明入站地址仍需确认。这个显示用地址不能放进已验证 panel_urls。已有映射或受信任域名时直接显示真实入口，不加替换提示。终端不再提示编辑 port-mappings.json；该文件的自动读取功能仍保留。
 
 接口依据：[按 MAC 列出网卡](https://docs.nvidia.com/dsx-air/api-reference/interfaces/api-v-3-simulations-nodes-interfaces-list/)、[读取已分配的外部主机与端口](https://docs.nvidia.com/dsx-air/api-reference/services/api-v-3-simulations-nodes-interfaces-services-list/)。
 
@@ -123,7 +125,7 @@ verify-node.py 为每个候选启动临时 sing-box，只监听 loopback。经�
 
 需要手动开放/映射的端口只列一次；已工作的 CF 链路不显示重复的必需入站步骤，但按用户要求保留一行“备用直连端口（可选）”。完整说明保存 /etc/residential-stack/deployment-details.txt；安装器另创建本次 /root/ip-install.XXXXXX.log，使用 umask 077，通过 IP_INSTALL_LOG 传给子进程。
 
-quiet() 只捕获不需要用户交互的命令输出，保留退出码。不要全局重定向：初始菜单及手动参数提示必须可见。apt、下载进度、systemd 启用记录、更新器和本机握手细节写入日志；错误仍显示失败阶段与日志路径。安装日志在卸载后保留，便于排障；需由 root 自行清理。不使用尾部重复总结覆盖已显示的下一步。
+quiet() 将更新器和本机握手细节写入日志，保留退出码；live() 使用 tee 实时显示基础组件安装、节点下载和面板/代理服务启动过程，并同时记日志，依赖 pipefail 保留失败状态。不要全局重定向：初始菜单及手动参数提示必须可见。所有过程信息出现在三个结果框前；第三框后不追加信息。安装日志在卸载后保留，便于排障；需由 root 自行清理。无已生成 UDP/替代入口时，操作区说明当前按不支持 UDP 处理，已有 TCP 直连与家宽中转两条节点；不再引导用户填写 CF 令牌。
 
 私人授权请求必须保留明确 User-Agent。CF 403/1010 或 HTML 拦截页表示边缘拦截，不能直接判定登记码过期；后台 JSON 403 才提示码无效/过期/已用或机器授权失效，不输出原始响应中的任意内容。
 
