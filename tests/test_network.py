@@ -1,11 +1,13 @@
 """No real cloud API calls, firewall mutations or system services in this suite."""
 import importlib.util
+import io
 import json
 import os
 import pathlib
 import subprocess
 import tempfile
 import unittest
+import urllib.error
 from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -142,6 +144,65 @@ class NetworkTests(unittest.TestCase):
             return '/opt/bin/sing-box run -c ' + str(config)
         with patch.object(d, 'run', side_effect=output):
             self.assertEqual(d.active_configs(), [config])
+
+    def test_hub_requests_use_header_that_reaches_cloudflare_worker(self):
+        seen=[]
+        def respond(request,timeout):
+            seen.append((request,timeout));return io.BytesIO(b'{"ok":true}')
+        with patch.object(n.urllib.request,'urlopen',side_effect=respond):
+            n.hub_request({'url':'https://hub.example.com'},'POST','provision',{},'test-enrollment')
+        request,timeout=seen[0]
+        self.assertTrue(request.get_header('User-agent').startswith('Mozilla/5.0'))
+        self.assertEqual(request.get_header('Authorization'),'Bearer test-enrollment')
+        self.assertEqual(timeout,90)
+
+    def test_edge_block_is_not_reported_as_expired_enrollment(self):
+        for raw,message in [(b'error code: 1010','边缘拦截'),(b'{"error":"invalid"}','授权码无效')]:
+            error=urllib.error.HTTPError('https://hub.example.com',403,'Forbidden',{},io.BytesIO(raw))
+            with patch.object(n.urllib.request,'urlopen',side_effect=error):
+                with self.assertRaisesRegex(RuntimeError,message):
+                    n.hub_request({'url':'https://hub.example.com'},'POST','provision',{},'once')
+
+    def test_closed_ports_keep_generated_links_panel_and_port_list(self):
+        import types
+        binary=self.root/'sing-box';binary.touch()
+        n.write(self.root/'network.json',{'mode':'direct','udp_available':True})
+        settings={'public_ip':'192.0.2.10','panel_port':30443,'proxy_port':30101,'sing_box_bin':str(binary)}
+        n.write(self.root/'settings.json',settings)
+        n.write(self.root/'auth.json',{'username':'test','password':'test-password'})
+        links={'tcp':'vless://test@192.0.2.10:31001','udp':'hysteria2://test@192.0.2.10:31002',
+               'home':'vless://home@192.0.2.10:31003'}
+        n.write(self.root/'native-links.json',links)
+        verifier=types.SimpleNamespace(verify=lambda *a:{'ok':False,'reason':'port blocked'})
+        real_path=pathlib.Path
+        def local_path(value):
+            return self.root/real_path(value).name if str(value).startswith('/root/') else real_path(value)
+        with patch.dict(os.environ,{},clear=True),patch.object(n,'pathlib',types.SimpleNamespace(Path=local_path)), \
+             patch.object(n,'UNITS',self.root),patch.object(n,'firewall',return_value=[]) as ports,patch.object(n,'run'), \
+             patch.object(n,'load_verifier',return_value=verifier),patch.object(n,'panel_check',return_value=False), \
+             patch.object(n,'cf_credentials',side_effect=ValueError('missing authorization')),patch('sys.stdout',new_callable=io.StringIO):
+            self.assertEqual(n.apply(),2)
+        self.assertEqual((self.root/'three-nodes-links.txt').read_text().splitlines(),list(links.values()))
+        self.assertEqual(n.read(self.root/'links.json'),dict.fromkeys(links,''))
+        self.assertIn(('tcp',30443),ports.call_args.args[0])
+        summary=(self.root/'three-nodes-info.txt').read_text(encoding='utf-8')
+        self.assertIn('https://192.0.2.10:30443/',summary)
+        self.assertIn('已生成，公网检测未通过',summary)
+        self.assertIn('住宅代理内部端口 30101',summary)
+        self.assertEqual(n.read(self.root/'network-report.json')['ready_roles'],[])
+
+    def test_unmapped_host_never_exports_egress_ip_as_incoming_address(self):
+        state={'mode':'mapped','udp_available':False,'mappings':{}}
+        settings={'public_ip':'192.0.2.10','panel_port':30443,'proxy_port':30001}
+        self.assertEqual(n.pending_panel_urls(state,settings),[])
+        exported=n.generated_exports({'tcp':[''],'udp':[],'home':['']},{})
+        self.assertFalse(any(exported.values()))
+        instructions='\n'.join(n.access_instructions(state,settings,{'tcp':'vless://test@192.0.2.10:31001'}))
+        self.assertIn('住宅面板：TCP 内部端口 30443',instructions)
+        self.assertIn('平台给出的外部主机名和外部端口',instructions)
+        self.assertNotIn('https://192.0.2.10',instructions)
+        state.update(external_address='worker.example.com',panel_external_port=44443)
+        self.assertEqual(n.pending_panel_urls(state,settings),['https://worker.example.com:44443/'])
 
     def test_private_hub_with_working_native_nodes_still_gets_authorized_panel(self):
         import types

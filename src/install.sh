@@ -171,7 +171,7 @@ finish_network() {
     NETWORK_RESULT=0
     python3 "$STACK_DIR/network-adapter.py" apply || NETWORK_RESULT=$?
     if [[ "$NETWORK_RESULT" != 0 ]]; then
-      printf '\n部分项目未通过公开入口检测，请查看上方中文说明；不会将失败节点标为可用。\n' >&2
+      printf '\n服务配置已保留；部分公网入口尚未通过。已生成的链接和端口见上方，可先开放/映射端口再重跑检查。\n' >&2
     fi
   fi
   rm -f "$NETWORK_TOOL"

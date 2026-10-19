@@ -116,7 +116,7 @@ class Cloudflare:
 def cf_credentials():
     c = read(ROOT / 'cloudflare.json')
     token = os.environ.get('IP_CF_API_TOKEN') or c.get('api_token') or ask('Cloudflare API 令牌', secret=True)
-    if not token: raise ValueError('缺少 Cloudflare 授权。请在手动模式填写，或预先设置 IP_CF_API_TOKEN')
+    if not token: raise ValueError('没有收到私人汇总授权，也未配置自己的 Cloudflare 授权。私人用户请登录汇总面板，点击“新增机器”重新复制完整专属命令；公共命令不会使用维护者的域名或隧道。自有资源模式可设置 IP_CF_API_TOKEN 和 IP_CF_ZONE。')
     cf = Cloudflare(token)
     zone_name = os.environ.get('IP_CF_ZONE') or c.get('zone_name') or ask('用于部署的 Cloudflare 域名')
     if not zone_name: raise ValueError('缺少域名，请设置 IP_CF_ZONE 或在手动模式填写')
@@ -241,6 +241,7 @@ def tunnel_setup(cf, c, state, settings, auth, binary):
     ingress += [{'hostname': hosts[r], 'service': 'http://127.0.0.1:' + str(state['ws'][r]['port'])} for r in ('tcp', 'udp', 'home')]
     cf.call('PUT', base + '/' + state['tunnel_id'] + '/configurations', {'config': {'ingress': ingress + [{'service': 'http_status:404'}]}})
     for host in hosts.values(): ensure_dns(cf, c, state, host, 'CNAME', state['tunnel_id'] + '.cfargotunnel.com', True)
+    state['tunnel_hosts'] = hosts; write(ROOT / 'network.json', state)
     token = cf.call('GET', base + '/' + state['tunnel_id'] + '/token')
     start_tunnel(token)
     return hosts, {r: ws_uri(r, state['ws'][r], hosts[r]) for r in ('tcp', 'udp', 'home')}
@@ -305,6 +306,52 @@ def choose_verified(candidates, test):
             if report['ok']:
                 selected[role] = link; break
     return selected, results
+
+
+def generated_exports(candidates, selected):
+    """Export configured addresses even before ports open; readiness stays separate."""
+    return {role: selected.get(role) or next((uri for uri in candidates.get(role, []) if uri), '')
+            for role in ('tcp', 'udp', 'home')}
+
+
+def pending_panel_urls(state, settings):
+    """Never turn an unknown NAT mapping into a fabricated public URL."""
+    urls = []
+    if state['mode'] == 'direct':
+        urls.append('https://' + settings['public_ip'] + ':' + str(settings['panel_port']) + '/')
+    elif state.get('external_address') and state.get('panel_external_port'):
+        urls.append('https://' + state['external_address'] + ':' + str(state['panel_external_port']) + '/')
+    if state.get('private_hosts', {}).get('panel'):
+        urls.append('https://' + state['private_hosts']['panel'] + '/')
+    if state.get('tunnel_hosts', {}).get('panel'):
+        urls.append('https://' + state['tunnel_hosts']['panel'] + '/')
+    return list(dict.fromkeys(urls))
+
+
+def access_instructions(state, settings, links):
+    lines = []
+    for role, title in [('tcp', 'TCP 节点'), ('udp', 'Hysteria2 UDP'), ('home', '住宅节点')]:
+        uri = links.get(role)
+        if uri:
+            proto = 'UDP' if urllib.parse.urlsplit(uri).scheme in ('hysteria2', 'hy2') else 'TCP'
+            inside = urllib.parse.urlsplit(uri).port
+            if state['mode'] == 'mapped':
+                outside = state.get('mappings', {}).get(role)
+                lines.append(title + '：' + proto + ' 内部端口 ' + str(inside) +
+                    (' → 外部端口 ' + str(outside) if outside else ' → 在平台创建映射后记录外部端口'))
+            else: lines.append(title + '：云平台入站放行 ' + proto + ' ' + str(inside))
+    inside = settings['panel_port']
+    lines.append('住宅面板：TCP 内部端口 ' + str(inside) +
+        (' → ' + ('外部端口 ' + str(state['panel_external_port']) if state.get('panel_external_port') else '在平台创建映射后记录外部端口')
+         if state['mode'] == 'mapped' else '；云平台入站放行 TCP ' + str(inside)))
+    if state['mode'] == 'mapped':
+        lines += ['映射机器的公网出口 IP 不一定是入站地址；请使用平台给出的外部主机名和外部端口。',
+                  '映射后再次运行安装命令，选择 2 手动填写外部地址和各端口；会复用已有节点和密码。']
+        if not state.get('udp_available'):
+            lines.append('尚未确认平台支持 UDP：不能把 Other/TCP 映射当作 Hysteria2。第二条的 TCP 替代入口需要同机 CF 隧道授权。')
+    lines += ['住宅代理内部端口 ' + str(settings.get('proxy_port', '见 settings.json')) + '、内部 API 和 WS 后端不需要向公网开放。',
+              '已授权且连接正常的 CF 隧道入口不需要新增公网入站映射。']
+    return lines
 
 
 def panel_check(url, auth):
@@ -474,7 +521,8 @@ def apply():
     for role in ('tcp', 'udp', 'home'):
         if role == 'udp' and not state['udp_available']: continue
         if links.get(role): ports.append(('udp' if role == 'udp' else 'tcp', urllib.parse.urlsplit(links[role]).port))
-    if state['mode'] == 'direct' or state.get('panel_external_port'): ports.append(('tcp', settings['panel_port']))
+    # Open/list the panel listener even when its cloud-side mapping is created later.
+    ports.append(('tcp', settings['panel_port']))
     port_report = firewall(ports)
     write(ROOT / 'firewall-ports.json', ports)
     firewall_unit = UNITS / 'residential-firewall.service'
@@ -486,6 +534,8 @@ def apply():
         raise ValueError('端口服务归属无法确认，未覆盖')
     firewall_unit.write_text(firewall_text)
     run(['systemctl', 'daemon-reload']); run(['systemctl', 'enable', 'residential-firewall.service'])
+    print('\n已生成本机服务；可以先按以下信息在平台放行或映射端口：\n' +
+          '\n'.join(access_instructions(state, settings, links)) + '\n', flush=True)
     if state['mode'] == 'mapped':
         # No repeated public-IP HTTP-01 attempts on an unmapped machine.
         if state.get('certificate_mode') != 'domain' and (UNITS / 'residential-cert-renew.timer').exists():
@@ -533,10 +583,20 @@ def apply():
                     errors.append('备用证书入口失败：' + safe_error(e))
         except (OSError, RuntimeError, ValueError, urllib.error.URLError) as e:
             errors.append(safe_error(e))
+    # Domain/credentials can already exist when the connector or TLS readiness
+    # check fails. Keep these generated entries visible, without marking ready.
+    assigned_hosts = state.get('private_hosts') or state.get('tunnel_hosts') or {}
+    for role in ('tcp', 'udp', 'home'):
+        if assigned_hosts.get(role) and state.get('ws', {}).get(role):
+            uri = ws_uri(role, state['ws'][role], assigned_hosts[role])
+            if uri not in candidates[role]: candidates[role].append(uri)
     selected, checks = choose_verified(candidates, test)
+    exported = generated_exports(candidates, selected)
+    pending_panels = [u for u in pending_panel_urls(state, settings) if u not in panel_urls]
     report = {'schema': 1, 'mode': state['mode'], 'checks': checks, 'ports': port_report,
               'errors': errors, 'panel_urls': panel_urls, 'ready_roles': list(selected),
-              'scope': 'public-self-test', 'client_test_required': True}
+              'scope': 'public-self-test', 'client_test_required': True,
+              'generated_roles': [r for r, uri in exported.items() if uri], 'pending_panel_urls': pending_panels}
     write(ROOT / 'network-report.json', report)
     write(ROOT / 'candidate-links.json', candidates)
     write(ROOT / 'links.json', {r: selected.get(r, '') for r in ('tcp', 'udp', 'home')})
@@ -551,24 +611,30 @@ def apply():
     report['hub_registered'] = bool(state.get('hub_registered'))
     report['hub_requirement_met'] = hub_ok
     write(ROOT / 'network-report.json', report)
-    export = '\n'.join(selected[r] for r in ('tcp', 'udp', 'home') if r in selected)
+    export = '\n'.join(exported[r] for r in ('tcp', 'udp', 'home') if exported[r])
     destination = pathlib.Path('/root/three-nodes-links.txt')
     destination.write_text(export + ('\n' if export else '')); destination.chmod(0o600)
     lines = ['部署结果：' + ('三个入口公开自测通过' if len(selected) == 3 and panel_urls and hub_ok else '部分项目尚未通过'),
-             '通过公开入口的节点链接（可一起复制导入）：', '', export, '',
+             '已生成的节点链接（可一起复制导入；未通过项需先放行端口或修复连接）：', '', export or '暂无可确认外部地址的链接；原生节点配置仍保存在本机，见下方映射或授权提示。', '',
              '检查范围：这台 VPS 访问公开入口；尚未代表你所在网络的 v2rayN 实测。']
     for role, title in [('tcp', '第一条'), ('udp', '第二条'), ('home', '住宅出口')]:
-        lines.append(title + '：' + ('公开握手和连续两次 HTTPS 出站通过' if role in selected else '未通过，未放入可用链接'))
-    if 'udp' in selected and selected['udp'].startswith('trojan://'):
+        lines.append(title + '：' + ('公开握手和连续两次 HTTPS 出站通过' if role in selected else
+            '已生成，公网检测未通过；可先开放端口再重试' if exported[role] else
+            '尚缺外部地址/端口映射或已授权的替代入口，未编造公网链接'))
+    if exported['udp'].startswith('trojan://'):
         lines.append('第二条使用 Trojan WebSocket + TLS，属于 TCP 替代方案，不是 Hysteria2。')
-    lines += ['住宅管理面板：' + ('、'.join(panel_urls) if panel_urls else '尚未验证可用，请查看错误说明'),
+    lines += ['住宅管理面板：' + ('、'.join(panel_urls) if panel_urls else '公网入口尚未验证通过'),
+              *(['已生成的面板地址（待端口开放及证书验证）：' + '、'.join(pending_panels)] if pending_panels else []),
+              '面板本机地址：https://127.0.0.1:' + str(settings['panel_port']) + '/（仅本机或 SSH 转发访问；临时证书可能不受信任）',
               '面板用户名：' + auth['username'], '面板密码：' + auth['password'], '',
               '后台端口提示（云平台未验证时仍需核对）：']
     for item in port_report:
         lines.append(item['protocol'].upper() + ' 内部端口 ' + str(item['internal_port']) +
                      '；系统放行' + ('完成' if item['host_opened'] else '失败，请手动检查') + '；云平台需放行或建立映射')
+    lines += access_instructions(state, settings, links)
     lines += errors
-    lines += ['详细检测：/etc/residential-stack/network-report.json',
+    lines += ['再次检查：可重新运行安装命令；已有配置会复用，不需要先卸载。',
+              '详细检测：/etc/residential-stack/network-report.json',
               '未通过的候选链接：/etc/residential-stack/candidate-links.json（仅管理员可读）']
     summary = '\n'.join(lines) + '\n'
     info = pathlib.Path('/root/three-nodes-info.txt'); info.write_text(summary, encoding='utf-8'); info.chmod(0o600)
@@ -588,10 +654,17 @@ def hub_request(config, method, action, payload=None, enrollment=None):
     if not token: raise ValueError('缺少管理员签发的私人授权；不会自动获取他人的域名或隧道')
     request = urllib.request.Request(config['url'].rstrip('/') + '/api/' + action, method=method,
         data=json.dumps(payload).encode() if payload is not None else None,
-        headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
+        headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json',
+                 'User-Agent': 'Mozilla/5.0 (compatible; ip-installer/1.0)'})
     try:
         with urllib.request.urlopen(request, timeout=90 if action == 'provision' else 25) as response: return json.load(response)
     except urllib.error.HTTPError as error:
+        raw = error.read(8192).decode('utf-8', errors='replace')
+        if '1010' in raw or '<html' in raw.lower() or '<!doctype html' in raw.lower():
+            raise RuntimeError('统一面板请求被 Cloudflare 边缘拦截，HTTP ' + str(error.code) + '；不是端口未开放，也不能据此判定授权码过期。请使用最新版安装命令重试。') from None
+        if error.code == 403:
+            detail = '本机授权可能已撤销，请保留配置并在汇总后台核对' if config.get('machine_token') else '私人授权码无效、已过期或已使用；请在汇总面板点击“新增机器”获取新命令'
+            raise RuntimeError('统一面板授权未通过，HTTP 403；' + detail) from None
         raise RuntimeError('统一面板接入失败，HTTP ' + str(error.code)) from None
 
 

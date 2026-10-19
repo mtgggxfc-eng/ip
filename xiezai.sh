@@ -134,7 +134,7 @@ def inventory(base=pathlib.Path('/')):
         add_target(plan, '/root/three-nodes-links.txt')
     info = plan.path('/root/three-nodes-info.txt')
     saved = text(info)
-    if ('TCP 节点状态：' in saved and '住宅管理面板：' in saved) or (stack_owned and 'vless://' in saved and '面板' in saved):
+    if ('TCP 节点状态：' in saved and '住宅管理面板：' in saved) or (stack_owned and ('vless://' in saved and '面板' in saved or saved.startswith('部署结果：') and '面板本机地址：https://127.0.0.1:' in saved)):
         add_target(plan, '/root/three-nodes-info.txt')
     if node_owned:
         for name in ('hy2-cert.pem', 'hy2-key.pem'):

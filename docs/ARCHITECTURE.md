@@ -60,7 +60,7 @@ flowchart LR
 | native-links.json | 原生入口候选，不能当作已验证清单 |
 | candidate-links.json | 本轮尝试的入口，包含节点凭据 |
 | links.json | 本轮公开自测通过的入口 |
-| network-report.json | 时间、测试范围、结果、端口状态，不含完整链接 |
+| network-report.json | 测试范围、结果、端口状态；generated_roles/ready_roles 分开，pending_panel_urls 不代表已可达；不含完整节点链接 |
 | ws.json | loopback WS 入口及住宅路由 |
 | firewall-ports.json | 本项目请求放行的协议与内部端口 |
 | acme*、panel-*.pem、证书脚本 | 证书、独立 Certbot 数据与续期 |
@@ -71,7 +71,7 @@ flowchart LR
 | /opt/residential-stack-agent | 自有代理、候选配置、有限大小日志 |
 | /opt/residential-stack-bin | 自有 sing-box、可选 cloudflared，不替换系统程序 |
 | /opt/residential-certbot | 独立证书虚拟环境 |
-| /root/three-nodes-info.txt、three-nodes-links.txt | 最终中文结果与通过测试的复制区；600 |
+| /root/three-nodes-info.txt、three-nodes-links.txt | 中文结果与已生成链接复制区（可能尚未通过公网测试）；600 |
 
 native-links 与最终 links 分离，避免重复安装时把旧的隧道入口当作原生入口。诊断资料分享前须脱敏。
 
