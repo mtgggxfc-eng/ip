@@ -27,10 +27,15 @@ if not s.get('agent_port'):
 t=p.with_name(p.name+'.tmp'); t.write_text(json.dumps(s,ensure_ascii=False,indent=2)+'\n'); t.chmod(0o600); os.replace(t,p)
 links={k:os.environ.get(v,'') for k,v in [('tcp','IP_LINK_TCP'),('udp','IP_LINK_UDP'),('home','IP_LINK_HOME')]}
 if not any(v in os.environ for v in ("IP_LINK_TCP","IP_LINK_UDP","IP_LINK_HOME")):
-    import re
-    saved=pathlib.Path('/root/three-nodes-info.txt')
-    found=re.findall(r'(?:vless|hysteria2)://[^\s]+', saved.read_text() if saved.exists() else '')
-    if len(found)>=3: links=dict(zip(('tcp','udp','home'),found[:3]))
+    native=pathlib.Path('/etc/residential-stack/native-links.json')
+    if native.exists(): links=json.loads(native.read_text())
+    elif pathlib.Path('/etc/residential-stack/node-groups.json').exists():
+        links=json.loads(pathlib.Path('/etc/residential-stack/node-groups.json').read_text()).get('direct',{})
+    else:
+        import re
+        saved=pathlib.Path('/root/three-nodes-info.txt')
+        found=re.findall(r'(?:vless|hysteria2)://[^\s]+', saved.read_text() if saved.exists() else '')
+        if len(found)>=3: links=dict(zip(('tcp','udp','home'),found[:3]))
 if any(links.values()):
     native=pathlib.Path('/etc/residential-stack/native-links.json'); native.write_text(json.dumps(links,indent=2)+'\n'); native.chmod(0o600)
     p=pathlib.Path('/etc/residential-stack/links.json'); p.write_text(json.dumps(links,indent=2)+'\n'); p.chmod(0o600)

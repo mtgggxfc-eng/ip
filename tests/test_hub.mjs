@@ -130,3 +130,18 @@ await handle(request('/api/machines/'+provisioned.machine_id,'DELETE'),privateEn
 assert.equal(tunnels.size,0);assert.equal(dns.size,0);assert(machines.has(reg2.machine_id));
 assert.equal((await handle(request('/api/provision','POST','Bearer '+provisioned.machine_token,provisionData),privateEnv)).status,403);
 console.log('Private resources: unauthorized provisioning blocked, enrollment single-use, account token never returned, retries idempotent, DNS challenge scoped to the same machine, own resources cleaned.');
+
+const directEnrollment=await enroll('直连管理机器');
+const directData={username:'panel-admin',password:panelPassword,ports:{panel:30100},resource_mode:'direct',external_address:'192.0.2.10',panel_external_port:30443};
+assert.equal((await handle(request('/api/provision','POST','Bearer '+directEnrollment.code,{...directData,external_address:''}),privateEnv)).status,400);
+const direct=await(await handle(request('/api/provision','POST','Bearer '+directEnrollment.code,directData),privateEnv)).json();
+assert(direct.ok);assert(direct.direct_host);assert.equal(tunnels.size,0);
+assert(!direct.tunnel_token);assert(!JSON.stringify(direct).includes(privateEnv.CF_API_TOKEN));
+assert([...dns.values()].every(r=>r.name===direct.direct_host&&r.type==='A'&&r.proxied===false));
+const directRetry=await(await handle(request('/api/provision','POST','Bearer '+direct.machine_token,directData),privateEnv)).json();
+assert(directRetry.ok);assert.equal(directRetry.machine_id,direct.machine_id);assert.equal(tunnels.size,0);assert.equal(dns.size,1);
+await handle(request('/api/dns-challenge','POST','Bearer '+direct.machine_token,{action:'present',value:challenge}),privateEnv);
+assert([...dns.values()].some(r=>r.type==='TXT'&&r.name==='_acme-challenge.'+direct.direct_host));
+await handle(request('/api/machines/'+direct.machine_id,'DELETE'),privateEnv);
+assert.equal(tunnels.size,0);assert.equal(dns.size,0);assert(machines.has(reg2.machine_id));
+console.log('Direct management: domain/DNS-only provisioning, no tunnel or account-token delivery, validation before enrollment, idempotence and owned cleanup passed.');

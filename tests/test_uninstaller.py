@@ -25,7 +25,7 @@ def fixture(base):
     put(base,'/opt/residential-stack-bin/sing-box','binary')
     put(base,'/opt/residential-certbot/pyvenv.cfg','home = /usr/bin')
     put(base,'/opt/residential-certbot/bin/certbot','binary')
-    put(base,'/root/three-nodes-links.txt','vless://tcp\nhysteria2://udp\nvless://home\n')
+    put(base,'/root/three-nodes-links.txt','vless://tcp\nhysteria2://udp\nvless://home\nvless://cf-tcp\ntrojan://cf-alternative\nvless://cf-home\n')
     put(base,'/root/three-nodes-info.txt','TCP 节点状态：ok\n住宅管理面板：https://example.test')
     originals={
         '/etc/systemd/system/sing-box.service':'original-singbox',

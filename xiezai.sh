@@ -130,7 +130,7 @@ def inventory(base=pathlib.Path('/')):
         else:
             plan.preserved.append('无法确认的证书程序目录：/opt/residential-certbot')
     links = plan.path('/root/three-nodes-links.txt')
-    if re.fullmatch(r'(?:(?:vless|hysteria2|trojan)://[^\s]+\n?){1,3}', text(links)) or (stack_owned and links.is_file() and not text(links)):
+    if re.fullmatch(r'(?:(?:vless|hysteria2|trojan)://[^\s]+\n?){1,3}', text(links)) or (stack_owned and (re.fullmatch(r'(?:(?:vless|hysteria2|trojan)://[^\s]+\n?){1,6}',text(links)) or links.is_file() and not text(links))):
         add_target(plan, '/root/three-nodes-links.txt')
     info = plan.path('/root/three-nodes-info.txt')
     saved = text(info)

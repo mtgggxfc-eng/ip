@@ -10,6 +10,8 @@
 
 ## 2. 环境判断与连接优先级
 
+最新终端同时输出 A 直连/B CF 两组，详见 NODE-GROUPS.md。以下每角色优选规则仅用于兼容 links.json，不再用于隐藏另一组已生成链接；没有直连/CF 选择菜单。
+
 prepare() 检查已有 network.json。新实例的默认路由源地址为 link-local 时，默认按映射环境处理，适配 NVIDIA Air。普通云 VPS 即使网卡是私网地址，也不能仅凭私网 IP 就判定为这种映射机器。
 
 这不是万能平台识别。无法准确推断时使用普通模式；通过公开自测发现入口失败后尝试已授权的隧道。用户也可显式设置 IP_NETWORK_MODE。
@@ -29,6 +31,8 @@ prepare() 检查已有 network.json。新实例的默认路由源地址为 link-
 Hysteria2 能在本机握手，不证明平台会转发公网 UDP。NVIDIA Services 的 HTTP/HTTPS/Other/SSH 是服务类型，其公开创建接口没有 UDP 协议字段；不把 Other 当成 UDP 支持。
 
 无 UDP 的默认替代是同机 Trojan WebSocket TLS，不使用其他 VPS。Hysteria Realms 需要双端支持、UDP 出站、可打洞 NAT；不作为默认分享链接。Mimic 需要双端 Linux/eBPF，也不符合普通 Windows v2rayN 一条链接导入的目标。
+
+两组版本区分本机 UDP 配置与平台 UDP：映射机器也尝试生成真实 HY2 服务及候选链接，但平台映射未知时 A 组 UDP 标为待确认；B 组第二条一直是明确非 UDP 的 Trojan TCP。不能因为输出了六条就把未映射的原生 UDP 标成可用。
 
 CF 隧道不是专线。延迟、速度、地区可达性、CF 服务条款和上游出口都会影响体验。两个不同 WS 协议共用同一隧道，并不构成两条独立物理线路。
 

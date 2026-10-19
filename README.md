@@ -19,12 +19,14 @@ curl -fsSL https://raw.githubusercontent.com/mtgggxfc-eng/ip/main/jkyj.sh | { if
 
 **直接回车自动安装；输入 `2` 手动填写。** 自动模式不再询问各端口，使用随机空闲端口、`JP`、`www.amazon.com`。已有配置及已选国家会复用。短命令是公共安装入口，不附带私人汇总授权；需加入汇总时仍使用面板签发的完整专属命令。短入口源码和维护见 [docs/BOOTSTRAP.md](docs/BOOTSTRAP.md)。
 
+汇总面板专属命令会同时生成 **A 组直连 + B 组 CF 隧道，正常为 6 条链接**，不再选择连接模式。两组分区，可一起复制；直连与 CF 是否可用分别标注。没有 CF 授权的公共命令只生成本机组，不使用维护者资源。规则及限制见 [docs/NODE-GROUPS.md](docs/NODE-GROUPS.md)。
+
 首次缺少外部条件时先保留配置并提示；补齐后重跑、按回车自动续装并更新输出。普通端口放行可以直接复检；随机映射需要平台接口或一次性填写脚本生成的 `/etc/residential-stack/port-mappings.json`，不能在没有来源的情况下自动推算。UUID/密码保留，客户端静态链接需重新导入。
 
-| 环境 | 第一条 | 第二条 | 第三条 |
+| 分组 | 第一条 | 第二条 | 第三条 |
 |---|---|---|---|
-| 公网端口可用 | VLESS Reality TCP | Hysteria2 UDP | 住宅出口 Reality |
-| 直连不可用，已授权 CF 隧道 | VLESS WebSocket TLS | Trojan WebSocket TLS，TCP 替代 | 住宅出口 VLESS WebSocket TLS |
+| A 组直连 | TCP直连：VLESS Reality | UDP直连：Hysteria2 | 中转家宽：Reality |
+| B 组 CF 隧道 | TCP直连（CF）：VLESS WS TLS | TCP替代（CF，非UDP）：Trojan WS TLS | 中转家宽（CF）：VLESS WS TLS |
 
 优先选择通过检测的直连；没有 UDP 时，不用另一台 VPS 中转。节点与隧道程序均在本机运行，CF 是隧道服务提供方。
 
@@ -32,7 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/mtgggxfc-eng/ip/main/jkyj.sh | { if
 
 每次运行自动检查并补全缺失环境；系统 Python 较旧时，为证书组件准备独立 Python，不替换系统 Python。Ubuntu 20.04/Python 3.8 已实际签发并加载正式 IP 证书。环境范围、限制及维护见 [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)。
 
-原生节点导入后的默认别名：TCP直连、UDP直连、中转家宽。重跑会更新链接中的旧默认别名，连接参数保持不变；TCP 替代入口仍按真实协议标注。
+原生节点导入后的默认别名：TCP直连、UDP直连、中转家宽；CF 组加“（CF）”区分，TCP 替代入口明确非 UDP。重跑更新复制区，保留已有身份。已安装的映射机器缺原生 HY2 时，会补建本机配置；平台 UDP 映射仍需单独确认，不把服务存在当作公网可用。
 
 ## 面板与自动化
 

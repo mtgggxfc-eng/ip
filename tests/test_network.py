@@ -38,6 +38,14 @@ class NetworkTests(unittest.TestCase):
             n.prepare()
         state = n.read(self.root / 'network.json')
         self.assertEqual(state['mode'], 'mapped'); self.assertFalse(state['udp_available'])
+        self.assertNotIn('node_access',state)
+
+    def test_local_udp_creation_does_not_claim_platform_udp_support(self):
+        with patch.dict(os.environ,{'IP_SETUP_MODE':'auto'},clear=True),patch.object(n,'mapped_hint',return_value=True),patch.object(n.socket,'socket'),patch('sys.stdout',new_callable=io.StringIO) as output:
+            n.prepare()
+        state=n.read(self.root/'network.json')
+        self.assertTrue(state['udp_listener_supported']);self.assertFalse(state['udp_available'])
+        self.assertEqual(output.getvalue().splitlines(),['mapped','0'])
 
     def test_existing_instance_and_secrets_do_not_rotate(self):
         state = {'schema': 1, 'instance': 'test', 'mode': 'mapped', 'udp_available': False, 'mappings': {}}
@@ -328,7 +336,7 @@ class NetworkTests(unittest.TestCase):
             self.assertEqual(renamed.split('#')[0],link.split('#')[0])
             self.assertEqual(n.urllib.parse.unquote(renamed.split('#')[1]),new)
         alternative='trojan://credential@host.example:443#Trojan-WS-TLS-TCP-alternative'
-        self.assertEqual(n.update_alias(alternative),alternative)
+        self.assertEqual(n.urllib.parse.unquote(n.update_alias(alternative).split('#')[1]),'TCP替代（CF，非UDP）')
 
     def test_unmapped_summary_keeps_native_links_and_one_action_list(self):
         state={'mode':'mapped','udp_available':False,'mappings':{}}
@@ -392,7 +400,7 @@ sudo() { printf 'sudo-ran'; return 7; }
 '''
         for uid,curl_code,expected in [('0','0','installer-ran'),('1000','0','sudo-ran'),('0','22','')]:
             env=dict(os.environ,TEST_UID=uid,TEST_CURL_CODE=curl_code,TEST_DOWNLOAD=target.as_posix())
-            result=subprocess.run([executable,'-c',mocks+'\n'+source],env=env,capture_output=True,text=True)
+            result=subprocess.run([executable,'-c',mocks+'\n'+source],env=env,capture_output=True,text=True,encoding='utf-8')
             self.assertEqual(result.stdout,expected)
             self.assertEqual(result.returncode,7 if curl_code=='0' else 1)
             self.assertFalse(target.exists())
@@ -428,7 +436,7 @@ sudo() { printf 'sudo-ran'; return 7; }
         state.update(external_address='worker.example.com',panel_external_port=44443)
         self.assertEqual(n.pending_panel_urls(state,settings),['https://worker.example.com:44443/'])
 
-    def test_private_hub_with_working_native_nodes_still_gets_authorized_panel(self):
+    def test_private_hub_exports_native_and_cf_groups(self):
         import types
         binary=self.root/'sing-box';binary.touch()
         n.write(self.root/'network.json',{'mode':'direct','udp_available':True})
@@ -445,12 +453,64 @@ sudo() { printf 'sudo-ran'; return 7; }
              patch.object(n,'pathlib',types.SimpleNamespace(Path=local_path)), \
              patch.object(n,'UNITS',self.root),patch.object(n,'firewall',return_value=[]),patch.object(n,'run'), \
              patch.object(n,'load_verifier',return_value=verifier),patch.object(n,'panel_check',return_value=True), \
+             patch.object(n,'private_direct_setup',return_value='https://direct.example.com:30443/') as direct, \
              patch.object(n,'private_tunnel_setup',return_value=(hosts,{r:'fallback-'+r for r in links})) as provision, \
              patch.object(n,'register_hub',return_value='https://hub.example.com') as register:
             self.assertEqual(n.apply(),2)
-            provision.assert_called_once()
+            direct.assert_not_called();provision.assert_called_once()
             self.assertEqual(register.call_args.args[0],'https://panel.example.com/')
         self.assertEqual(n.read(self.root/'links.json'),links)
+        groups=n.read(self.root/'node-groups.json');self.assertEqual(groups['direct'],links)
+        self.assertEqual(len((self.root/'three-nodes-links.txt').read_text().splitlines()),6)
+        summary=(self.root/'three-nodes-info.txt').read_text(encoding='utf-8')
+        self.assertIn('【A组：直连节点',summary);self.assertIn('【B组：CF隧道节点',summary)
+
+    def test_both_groups_preserve_each_address_and_report_mapping_limits(self):
+        import types
+        native={'tcp':'vless://direct@192.0.2.10:31001','udp':'hysteria2://test@192.0.2.10:31002','home':'vless://home@192.0.2.10:31003'}
+        binary=self.root/'sing-box';binary.touch()
+        real_path=pathlib.Path
+        def local_path(value):return self.root/real_path(value).name if str(value).startswith('/root/') else real_path(value)
+        for mode,failed in [('mapped',set()),('direct',set()),('direct',{'home'}),('direct',{'tcp'})]:
+            with self.subTest(mode=mode,failed=failed):
+                state={'mode':mode,'udp_available':mode=='direct','mappings':{}}
+                links=dict(native)
+                settings={'public_ip':'192.0.2.10','panel_port':30443,'agent_port':30444,'proxy_port':30445,'sing_box_bin':str(binary)}
+                auth={'username':'u','password':'test-password','socks_username':'u','socks_password':'p'}
+                for name,value in [('network.json',state),('settings.json',settings),('auth.json',auth),('native-links.json',links)]:n.write(self.root/name,value)
+                hosts={r:r+'.example.com' for r in ('panel','tcp','udp','home')}
+                def tunnel(state,settings,auth,binary):
+                    state['private_hosts']=hosts;n.ws_config(state,settings,auth)
+                    return hosts,{r:n.ws_uri(r,state['ws'][r],hosts[r]) for r in ('tcp','udp','home')}
+                verifier=types.SimpleNamespace(verify=lambda uri,*args:{'ok':not any(uri==native[r] for r in failed)})
+                with patch.dict(os.environ,{'IP_HUB_URL':'https://hub.example.com'},clear=True),patch.object(n,'pathlib',types.SimpleNamespace(Path=local_path)), \
+                     patch.object(n,'UNITS',self.root),patch.object(n,'firewall',return_value=[]),patch.object(n,'run'),patch.object(n,'load_verifier',return_value=verifier), \
+                     patch.object(n,'panel_check',return_value=True),patch.object(n,'private_direct_setup',return_value='https://direct.example.com:30443/') as direct, \
+                     patch.object(n,'private_tunnel_setup',side_effect=tunnel) as provision,patch.object(n,'register_hub',return_value='https://hub.example.com'),patch('sys.stdout',new_callable=io.StringIO):
+                    n.apply()
+                exported=(self.root/'three-nodes-links.txt').read_text(encoding='utf-8').splitlines()
+                direct.assert_not_called();provision.assert_called_once();self.assertEqual(len(exported),6)
+                self.assertEqual(exported[:3],list(native.values()))
+                self.assertTrue(all('@192.0.2.10:' not in uri for uri in exported[3:]))
+                report=n.read(self.root/'network-report.json');self.assertEqual(report['node_groups']['cf']['generated_roles'],['tcp','udp','home'])
+                if mode=='mapped':
+                    summary=(self.root/'three-nodes-info.txt').read_text(encoding='utf-8');self.assertIn('平台 UDP 映射未确认',summary)
+
+    def test_ws_aliases_match_native_names_without_false_udp_label(self):
+        for role,expected in [('tcp','TCP直连（CF）'),('udp','TCP替代（CF，非UDP）'),('home','中转家宽（CF）')]:
+            uri=n.ws_uri(role,{'credential':'test','path':'/test'},'node.example.com')
+            self.assertEqual(n.urllib.parse.unquote(n.urllib.parse.urlsplit(uri).fragment),expected)
+
+    def test_updater_reads_native_identity_instead_of_six_link_text(self):
+        settings={'public_ip':'192.0.2.10','panel_port':30443,'agent_port':30444}
+        native={'tcp':'vless://native-tcp','udp':'hysteria2://native-udp','home':'vless://native-home'}
+        n.write(self.root/'settings.json',settings);n.write(self.root/'native-links.json',native)
+        (self.root/'three-nodes-info.txt').write_text('vless://wrong-tcp\nvless://wrong-home\nvless://wrong-cf\n')
+        source=(ROOT/'src/update.sh').read_text(encoding='utf-8')
+        code=source.split("python3 - <<'PY'\n",1)[1].split('\nPY\n',1)[0]
+        code=code.replace('/etc/residential-stack',self.root.as_posix()).replace('/root/three-nodes-info.txt',(self.root/'three-nodes-info.txt').as_posix())
+        with patch.dict(os.environ,{'IP_PUBLIC':'192.0.2.10'},clear=True):exec(compile(code,'<updater-native-identity>','exec'),{})
+        self.assertEqual(n.read(self.root/'native-links.json'),native)
 
     def test_native_builder_skips_udp_without_damaging_other_nodes(self):
         source = (ROOT / 'src/install.sh').read_text(encoding='utf-8')
@@ -464,6 +524,18 @@ sudo() { printf 'sudo-ran'; return 7; }
         value = n.read(self.root / 'nodes.json.new')
         self.assertEqual([i['tag'] for i in value['inbounds']], ['reality-direct', 'reality-home'])
         self.assertEqual(value['route']['rules'][0]['outbound'], 'home')
+
+    def test_adding_native_hy2_preserves_existing_reality_nodes(self):
+        source=(ROOT/'src/install.sh').read_text(encoding='utf-8')
+        code=source.split('export CONFIG ',1)[1].split("python3 - <<'PY'\n",1)[1].split('\nPY\n',1)[0]
+        before={'inbounds':[{'type':'vless','tag':'reality-direct','users':[{'uuid':'keep-direct'}]}, {'type':'vless','tag':'reality-home','users':[{'uuid':'keep-home'}]}], 'outbounds':[{'type':'direct','tag':'direct'},{'type':'socks','tag':'home','server_port':30001}], 'route':{'rules':[{'inbound':['reality-home'],'outbound':'home'}],'final':'direct'}}
+        config=self.root/'nodes.json';n.write(config,before)
+        env={'CONFIG':str(config),'EXIST_TCP':'vless://keep','EXIST_UDP':'','IP_DISABLE_UDP':'0','NEED_STACK':'0','HY2_PORT':'34567','HY2_PASS':'new-udp-password','SNI':'www.amazon.com'}
+        with patch.dict(os.environ,env,clear=True):exec(compile(code,'<add-native-udp>','exec'),{})
+        after=n.read(self.root/'nodes.json.new')
+        self.assertEqual(after['inbounds'][:2],before['inbounds'])
+        self.assertEqual(after['outbounds'],before['outbounds']);self.assertEqual(after['route'],before['route'])
+        self.assertEqual(after['inbounds'][2]['type'],'hysteria2');self.assertEqual(after['inbounds'][2]['listen_port'],34567)
 
 
 if __name__ == '__main__': unittest.main()

@@ -95,8 +95,13 @@ def prepare():
         if mode != p['mode']: p.update(mode=mode, udp_available=mode == 'direct')
     if os.environ.get('IP_UDP_AVAILABLE') in ('0', '1'):
         p['udp_available'] = os.environ['IP_UDP_AVAILABLE'] == '1'
+    # Local UDP configuration and a provider's UDP mapping are separate facts.
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe: probe.bind(('127.0.0.1',0))
+        p['udp_listener_supported'] = True
+    except OSError: p['udp_listener_supported'] = False
     write(ROOT / 'network.json', p)
-    print(p['mode']); print('0' if p['udp_available'] else '1')
+    print(p['mode']); print('0' if p['udp_listener_supported'] else '1')
 
 
 class Cloudflare:
@@ -211,10 +216,10 @@ def ws_config(state, settings, auth):
 
 def ws_uri(role, entry, host):
     kind = 'trojan' if role == 'udp' else 'vless'
-    label = {'tcp': 'VLESS-WS-TLS-TCP', 'udp': 'Trojan-WS-TLS-TCP-alternative', 'home': 'Residential-VLESS-WS-TLS'}[role]
+    label = {'tcp': 'TCP直连（CF）', 'udp': 'TCP替代（CF，非UDP）', 'home': '中转家宽（CF）'}[role]
     query = {'security': 'tls', 'type': 'ws', 'host': host, 'sni': host, 'path': entry['path']}
     if kind == 'vless': query['encryption'] = 'none'
-    return kind + '://' + entry['credential'] + '@' + host + ':443?' + urllib.parse.urlencode(query) + '#' + label
+    return kind + '://' + entry['credential'] + '@' + host + ':443?' + urllib.parse.urlencode(query) + '#' + urllib.parse.quote(label)
 
 
 def ws_origin_setup(state, settings, auth, binary):
@@ -258,16 +263,15 @@ def start_tunnel(token):
                 'tunnel --no-autoupdate run --token-file /etc/residential-stack/tunnel.token')
 
 
-def private_tunnel_setup(state, settings, auth, binary):
-    ws_origin_setup(state, settings, auth, binary)
+def private_resource_request(state, settings, auth, resource_mode):
     config = read(ROOT / 'hub.json')
     requested = os.environ.get('IP_HUB_URL')
     if requested and config.get('url') and requested.rstrip('/') != config['url'].rstrip('/'):
         raise ValueError('私人授权属于其他后台，未覆盖')
     config['url'] = requested or config.get('url')
     if not config.get('url'): raise ValueError('缺少私人资源后台地址')
-    payload = {'username': auth['username'], 'password': auth['password'],
-        'ports': {'panel': settings['agent_port'], **{r: state['ws'][r]['port'] for r in ('tcp', 'udp', 'home')}},
+    payload = {'username': auth['username'], 'password': auth['password'], 'resource_mode': resource_mode,
+        'ports': {'panel': settings['agent_port'], **({r: state['ws'][r]['port'] for r in ('tcp', 'udp', 'home')} if resource_mode == 'tunnel' else {})},
         'external_address': state.get('external_address') or (settings['public_ip'] if state['mode'] == 'direct' else ''),
         'panel_external_port': state.get('panel_external_port') or (settings['panel_port'] if state['mode'] == 'direct' else 0)}
     result = hub_request(config, 'POST', 'provision', payload, os.environ.get('IP_HUB_ENROLLMENT'))
@@ -276,9 +280,22 @@ def private_tunnel_setup(state, settings, auth, binary):
         write(ROOT / 'hub.json', config)
         state['hub_registered'] = True; write(ROOT / 'network.json', state)
     if not result.get('ok'): raise ValueError('私人资源配置未完成，授权已保存，可直接重试')
-    state['private_hosts'] = result['hosts']
     state['private_direct_host'] = result.get('direct_host', '')
     write(ROOT / 'network.json', state)
+    return result
+
+
+def private_direct_setup(state, settings, auth):
+    result = private_resource_request(state, settings, auth, 'direct')
+    host = result.get('direct_host')
+    if not host: raise ValueError('私人直连面板域名尚未建立')
+    return dns_panel_setup(None, {}, state, settings, host)
+
+
+def private_tunnel_setup(state, settings, auth, binary):
+    ws_origin_setup(state, settings, auth, binary)
+    result = private_resource_request(state, settings, auth, 'tunnel')
+    state['private_hosts'] = result['hosts']; write(ROOT / 'network.json', state)
     start_tunnel(result['tunnel_token'])
     return result['hosts'], {r: ws_uri(r, state['ws'][r], result['hosts'][r]) for r in ('tcp', 'udp', 'home')}
 
@@ -294,7 +311,8 @@ def mapped_link(link, address, port):
 def update_alias(link):
     if not link: return link
     base, separator, fragment = link.partition('#')
-    alias = {'VLESS-Reality-TCP':'TCP直连', 'Hysteria2-UDP':'UDP直连', 'Residential-Exit':'中转家宽'}.get(urllib.parse.unquote(fragment))
+    alias = {'VLESS-Reality-TCP':'TCP直连', 'Hysteria2-UDP':'UDP直连', 'Residential-Exit':'中转家宽',
+             'VLESS-WS-TLS-TCP':'TCP直连（CF）', 'Trojan-WS-TLS-TCP-alternative':'TCP替代（CF，非UDP）', 'Residential-VLESS-WS-TLS':'中转家宽（CF）'}.get(urllib.parse.unquote(fragment))
     return base + '#' + urllib.parse.quote(alias) if alias else link
 
 
@@ -380,26 +398,45 @@ def direct_ingress_pending(state, settings, native, selected, panels, port_repor
     return any(urllib.parse.urlsplit(url).hostname not in cf_panels for url in panels) and not port_externally_confirmed(port_report, 'tcp', settings['panel_port'])
 
 
-def concise_result(state, settings, auth, native, exported, selected, panels, pending_panels, hub_ok, port_report):
+def concise_result(state, settings, auth, native, exported, selected, panels, pending_panels, hub_ok, port_report, node_groups=None, group_ready=None):
     """Show generated configuration and the next action once. Details live in logs."""
     roles = ('tcp', 'udp', 'home')
     names = {'tcp': 'TCP 直连节点', 'udp': 'Hysteria2 节点', 'home': '住宅IP节点'}
-    count = sum(bool(exported.get(r)) for r in roles)
+    count = sum(bool(uri) for group in node_groups.values() for uri in group.values()) if node_groups else sum(bool(exported.get(r)) for r in roles)
     ready = len(selected) == 3 and panels and hub_ok
     pending_direct = direct_ingress_pending(state, settings, native, selected, panels, port_report)
     lines = ['部署结果：' + ('本机自测通过，公网直连入站尚待外部确认。' if ready and pending_direct else '当前入口本机自测通过。' if ready else '已生成 ' + str(count) + ' 个节点，仍有设置待完成。')]
-    raw_mapping = [r for r in roles if state['mode'] == 'mapped' and exported.get(r) and
-                   r not in selected and exported[r] == native.get(r) and
+    if node_groups:
+        lines[0] = '部署结果：已生成 ' + str(count) + ' 个节点，按直连与 CF 两组输出。'
+        for key,title in [('direct','A组直连'),('cf','B组CF')]:
+            total = sum(bool(uri) for uri in node_groups.get(key,{}).values())
+            lines.append(title + '：已生成 ' + str(total) + ' 条，本机协议/出口通过 ' + str(len((group_ready or {}).get(key,{}))) + ' 条' + ('；公网直连仍待外部确认。' if key=='direct' and total else '。'))
+    shown_direct = node_groups.get('direct',{}) if node_groups else exported
+    direct_selected = (group_ready or {}).get('direct',{}) if node_groups else selected
+    raw_mapping = [r for r in roles if state['mode'] == 'mapped' and shown_direct.get(r) and
+                   r not in direct_selected and shown_direct[r] == native.get(r) and
                    not (state.get('external_address') and state.get('mappings', {}).get(r))]
     node_lines = [exported[r] for r in roles if exported.get(r)] or ['暂无已生成节点。']
+    if node_groups:
+        node_lines=[]
+        for key,title in [('direct','【A组：直连节点｜优先使用】'),('cf','【B组：CF隧道节点｜备用】')]:
+            if node_lines:node_lines.append('')
+            node_lines.append(title)
+            node_lines += [node_groups.get(key,{}).get(r) for r in roles if node_groups.get(key,{}).get(r)] or ['本组未生成；请查看上方说明和详细日志。']
+        if node_groups.get('direct',{}).get('udp') and not state.get('udp_available'):
+            lines.append('A组 UDP 为已生成的本机配置；平台 UDP 映射未确认，不代表公网可用。')
+        elif not node_groups.get('direct',{}).get('udp'):
+            lines.append('A组 UDP 未生成，请查看系统 UDP 监听能力及安装日志。')
     if raw_mapping:
-        lines.append('下方原始链接的地址和端口需改为平台分配的外部地址、外部端口。')
+        lines.append(('A组原始直连链接' if node_groups else '下方原始链接') + '的地址和端口需改为平台分配的外部地址、外部端口。')
     waiting = [names[r] for r in roles if exported.get(r) and r not in selected]
     if waiting: lines.append('状态：已生成，本机协议或出口检测未通过（' + '、'.join(waiting) + '）。')
     if native.get('home') and exported.get('home') and 'home' not in selected and any(p.get('protocol') == 'tcp' and p.get('internal_port') == urllib.parse.urlsplit(native['home']).port and p.get('self_reachable') is True for p in port_report):
         lines.append('本机可连接住宅 TCP，但不能证明公网已放行；节点握手或出口失败原因见日志。')
     if not exported.get('udp') and state.get('udp_available'):
         lines.append('Hysteria2 节点未生成，请查看详细日志。')
+    if node_groups and node_groups.get('cf',{}).get('udp'):
+        lines.append('B组第二条为 Trojan TCP 替代，不是 Hysteria2 或 UDP。')
     elif exported.get('udp', '').startswith('trojan://'):
         lines.append('第二条为 Trojan TCP 替代，不是 Hysteria2。')
     panel = (panels or pending_panels or [''])[0]
@@ -411,16 +448,18 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
     if panel and not panels: lines.append('面板待验证，请检查端口和证书。')
     if not panels:
         certificate = read(ROOT / 'certificate-status.json')
-        cert_hint = (certificate['reason'] if certificate.get('reason') and not certificate.get('ok') else
+        tunnel_panels = {state.get(key, {}).get('panel') for key in ('private_hosts','tunnel_hosts')}
+        cert_hint = ('域名隧道面板尚未通过 HTTPS/API 检测，请检查隧道、DNS、证书传播及认证，详见日志。' if panel and urllib.parse.urlsplit(panel).hostname in tunnel_panels else
+                     certificate['reason'] if certificate.get('reason') and not certificate.get('ok') else
                      '正式证书已安装；请检查管理面板端口及 HTTPS 连通性。' if certificate.get('stage') == 'applied' else
                      '已配置域名证书，请检查域名入口及续期日志。' if state.get('certificate_mode') == 'domain' else
                      '随机端口映射不能完成 IP 证书验证，需使用已授权的域名或隧道入口。' if state['mode'] == 'mapped' else
                      '请检查证书申请日志；HTTPS 检测失败不能直接判定 TCP 80 未开放。')
         lines.append('面板 HTTPS：' + cert_hint)
     # Separate required native listeners from optional direct backups for CF.
-    native_roles = [r for r in roles if native.get(r) and (exported.get(r) == native[r] or
+    native_roles = [r for r in roles if native.get(r) and (shown_direct.get(r) == native[r] or
                     state['mode'] == 'mapped' and state.get('external_address') and state.get('mappings', {}).get(r) and
-                    exported.get(r) == mapped_link(native[r], state['external_address'], state['mappings'][r]))]
+                    shown_direct.get(r) == mapped_link(native[r], state['external_address'], state['mappings'][r]))]
     cf_panels = {state.get(key, {}).get('panel') for key in ('private_hosts', 'tunnel_hosts')}
     panel_native = not panel or urllib.parse.urlsplit(panel).hostname not in cf_panels
     needed = []
@@ -480,14 +519,17 @@ def concise_result(state, settings, auth, native, exported, selected, panels, pe
 def pending_panel_urls(state, settings):
     """Never turn an unknown NAT mapping into a fabricated public URL."""
     urls = []
-    if state['mode'] == 'direct':
-        urls.append('https://' + settings['public_ip'] + ':' + str(settings['panel_port']) + '/')
-    elif state.get('external_address') and state.get('panel_external_port'):
-        urls.append('https://' + state['external_address'] + ':' + str(state['panel_external_port']) + '/')
+    if state.get('certificate_mode') == 'domain' and state.get('private_direct_host'):
+        port = state.get('panel_external_port') or (settings['panel_port'] if state['mode'] == 'direct' else None)
+        if port: urls.append('https://' + state['private_direct_host'] + ':' + str(port) + '/')
     if state.get('private_hosts', {}).get('panel'):
         urls.append('https://' + state['private_hosts']['panel'] + '/')
     if state.get('tunnel_hosts', {}).get('panel'):
         urls.append('https://' + state['tunnel_hosts']['panel'] + '/')
+    if state.get('certificate_mode') != 'domain':
+        if state['mode'] == 'direct': urls.append('https://' + settings['public_ip'] + ':' + str(settings['panel_port']) + '/')
+        elif state.get('external_address') and state.get('panel_external_port'):
+            urls.append('https://' + state['external_address'] + ':' + str(state['panel_external_port']) + '/')
     return list(dict.fromkeys(urls))
 
 
@@ -652,6 +694,7 @@ def load_mapping_table(state, links, settings):
     for role, outside in pending.items():
         if role == 'panel': state['panel_external_port'] = outside
         else: state.setdefault('mappings', {})[role] = outside
+    if pending.get('udp'): state['udp_available'] = True
     if address and pending: state['mapping_source'] = 'mapping-file'
     write(ROOT / 'network.json', state)
     return bool(address and pending)
@@ -743,7 +786,6 @@ def apply():
         if not state['udp_available']: candidates['udp'] = []
     ports = []
     for role in ('tcp', 'udp', 'home'):
-        if role == 'udp' and not state['udp_available']: continue
         if links.get(role): ports.append(('udp' if role == 'udp' else 'tcp', urllib.parse.urlsplit(links[role]).port))
     # Open/list the panel listener even when its cloud-side mapping is created later.
     ports.append(('tcp', settings['panel_port']))
@@ -776,17 +818,21 @@ def apply():
         return dict(checked[link])
     print('\n正在检查节点，请稍候……', flush=True)
     native_good = {role: any(link and test(link)['ok'] for link in candidates[role]) for role in candidates}
+    direct_candidates = {role:list(uris) for role,uris in candidates.items()}
+    cf_candidates = {role:[] for role in candidates}
     private = bool(os.environ.get('IP_HUB_URL') or read(ROOT / 'hub.json').get('url')) and os.environ.get('IP_PRIVATE_RESOURCES', '1') != '0'
-    # The private hub accepts only its authorized HTTPS hostnames, never a raw IP
-    # or arbitrary origin. Keep native node priority while provisioning its panel.
-    need_cf = private or state['mode'] == 'mapped' or not panel_urls or not all(native_good.values())
+    own_cf = bool(os.environ.get('IP_CF_API_TOKEN') or read(ROOT / 'cloudflare.json').get('api_token'))
+    if private: panel_urls=[]
+    # Provision both independent groups when the installer has authorization.
+    # A private management URL does not replace the native group in the output.
+    need_cf = private or own_cf or state['mode']=='mapped' or not panel_urls or not all(native_good.values())
     if need_cf:
         try:
-            if private: panel_urls = []
             cf, c = (None, {}) if private else cf_credentials()
             try:
                 hosts, alternatives = private_tunnel_setup(state, settings, auth, binary) if private else tunnel_setup(cf, c, state, settings, auth, binary)
-                for role in candidates: candidates[role].append(alternatives[role])
+                for role in candidates:
+                    candidates[role].append(alternatives[role]);cf_candidates[role].append(alternatives[role])
                 url = 'https://' + hosts['panel'] + '/'
                 for attempt in range(4):
                     if panel_check(url, auth): panel_urls.append(url); break
@@ -798,9 +844,8 @@ def apply():
                 try:
                     if state['mode'] == 'direct':
                         state['external_address'] = settings['public_ip']; state['panel_external_port'] = settings['panel_port']
-                    private_host = state.get('private_direct_host') if private else None
-                    if private and not private_host: raise ValueError('私人备用面板尚无已授权的 DNS 记录或端口映射')
-                    url = dns_panel_setup(cf, c, state, settings, private_host)
+                    if private: url = private_direct_setup(state, settings, auth)
+                    else: url = dns_panel_setup(cf, c, state, settings)
                     if panel_check(url, auth): panel_urls.append(url)
                     else: errors.append('域名备用面板未通过公开 HTTPS 检测，请检查端口映射')
                 except (OSError, RuntimeError, ValueError, urllib.error.URLError, subprocess.SubprocessError) as e:
@@ -814,11 +859,16 @@ def apply():
         if assigned_hosts.get(role) and state.get('ws', {}).get(role):
             uri = ws_uri(role, state['ws'][role], assigned_hosts[role])
             if uri not in candidates[role]: candidates[role].append(uri)
+            if uri not in cf_candidates[role]: cf_candidates[role].append(uri)
     selected, checks = choose_verified(candidates, test)
+    direct_selected, direct_checks = choose_verified(direct_candidates, test)
+    cf_selected, cf_checks = choose_verified(cf_candidates, test)
     probe_public_ports(state, settings, links, native_good, panel_urls, port_report)
     exported = generated_exports(candidates, selected, links)
+    node_groups = {'direct':generated_exports(direct_candidates,direct_selected,links),'cf':generated_exports(cf_candidates,cf_selected)}
+    write(ROOT / 'node-groups.json',node_groups)
     pending_panels = [u for u in pending_panel_urls(state, settings) if u not in panel_urls]
-    report = {'schema': 1, 'mode': state['mode'], 'checks': checks, 'ports': port_report,
+    report = {'schema': 1, 'mode': state['mode'], 'node_groups':{group:{'generated_roles':[r for r,uri in uris.items() if uri], 'ready_roles':list(ready), 'checks':group_checks} for group,uris,ready,group_checks in [('direct',node_groups['direct'],direct_selected,direct_checks),('cf',node_groups['cf'],cf_selected,cf_checks)]}, 'checks': checks, 'ports': port_report,
               'errors': errors, 'panel_urls': panel_urls, 'ready_roles': list(selected),
               'scope': 'public-self-test', 'client_test_required': True,
               'generated_roles': [r for r, uri in exported.items() if uri], 'pending_panel_urls': pending_panels}
@@ -835,9 +885,9 @@ def apply():
             errors.append(safe_error(error))
     report['hub_registered'] = bool(state.get('hub_registered'))
     report['hub_requirement_met'] = hub_ok
-    report['direct_ingress_pending'] = direct_ingress_pending(state, settings, links, selected, panel_urls, port_report)
+    report['direct_ingress_pending'] = direct_ingress_pending(state, settings, links, node_groups['direct'], panel_urls, port_report)
     write(ROOT / 'network-report.json', report)
-    export = '\n'.join(exported[r] for r in ('tcp', 'udp', 'home') if exported[r])
+    export = '\n'.join(node_groups[group][r] for group in ('direct','cf') for r in ('tcp','udp','home') if node_groups[group][r])
     destination = pathlib.Path('/root/three-nodes-links.txt')
     destination.write_text(export + ('\n' if export else '')); destination.chmod(0o600)
     lines = ['部署结果：' + ('本机自测通过，公网直连入站尚待外部确认' if len(selected) == 3 and panel_urls and hub_ok and report['direct_ingress_pending'] else '三个入口本机自测通过' if len(selected) == 3 and panel_urls and hub_ok else '部分项目尚未通过'),
@@ -867,7 +917,7 @@ def apply():
     install_log = os.environ.get('IP_INSTALL_LOG')
     if install_log:
         with open(install_log, 'a', encoding='utf-8') as stream: stream.write('\n' + summary)
-    concise = concise_result(state, settings, auth, links, exported, selected, panel_urls, pending_panels, hub_ok, port_report)
+    concise = concise_result(state, settings, auth, links, exported, selected, panel_urls, pending_panels, hub_ok, port_report,node_groups,{'direct':direct_selected,'cf':cf_selected})
     info = pathlib.Path('/root/three-nodes-info.txt'); info.write_text(concise, encoding='utf-8'); info.chmod(0o600)
     print('\n' + concise)
     return 0 if len(selected) == 3 and panel_urls and hub_ok and not report['direct_ingress_pending'] else 2

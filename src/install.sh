@@ -147,7 +147,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 [[ -r /dev/tty ]] || die '需要交互式 SSH 终端。'
 if [[ -z "${IP_SETUP_MODE:-}" ]]; then
-  printf '\n选择安装方式：\n  回车：全部自动安装\n  输入 2：手动填写参数\n'
+  printf '\n选择安装方式：\n  回车：全部自动安装（授权齐全时同时生成直连和 CF 两组）\n  输入 2：手动填写参数\n'
   read -r -p '请选择（回车自动）: ' SETUP_CHOICE </dev/tty
   case "$SETUP_CHOICE" in ''|1) IP_SETUP_MODE=auto ;; 2) IP_SETUP_MODE=manual ;; *) die '请输入 2 或直接回车。' ;; esac
 fi
@@ -180,6 +180,7 @@ rm -f "$ENVIRONMENT_REPORT"
 IP_NETWORK_MODE="${NETWORK_SETUP[0]}"; IP_DISABLE_UDP="${NETWORK_SETUP[1]}"
 export IP_NETWORK_MODE IP_DISABLE_UDP
 if [[ "$IP_NETWORK_MODE" == mapped ]] || python3 -c 'import json; import sys; sys.exit(0 if json.load(open("/etc/residential-stack/network.json")).get("certificate_mode")=="domain" else 1)'; then export IP_SKIP_CERT=1; fi
+if [[ -n "${IP_HUB_URL:-}" ]] || python3 -c 'import json,pathlib,sys; p=pathlib.Path("/etc/residential-stack/hub.json"); sys.exit(0 if p.exists() and json.loads(p.read_text()).get("url") else 1)'; then export IP_SKIP_CERT=1; fi
 finish_network() {
   if [[ -f "$STACK_DIR/settings.json" && -f "$STACK_DIR/auth.json" ]]; then
     install -m 600 "$NETWORK_TOOL" "$STACK_DIR/network-adapter.py"

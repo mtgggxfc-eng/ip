@@ -63,6 +63,7 @@ flowchart LR
 | air.json | 可选 NVIDIA API 授权与明确的接口编号 |
 | hub.json | 可选汇总 URL、机器编号、仅限自身的机器令牌；无管理员密码 |
 | native-links.json | 原生入口候选，不能当作已验证清单 |
+| node-groups.json | direct/cf 两组已生成链接，各含 tcp/udp/home；包含凭据，600，不代表外部已验证 |
 | deployment-details.txt | 完整诊断与端口说明；终端使用精简结果 |
 | candidate-links.json | 本轮尝试的入口，包含节点凭据 |
 | links.json | 本轮公开自测通过的入口 |
@@ -81,7 +82,7 @@ flowchart LR
 | /opt/residential-stack-agent | 自有代理、候选配置、有限大小日志 |
 | /opt/residential-stack-bin | 自有 sing-box、可选 cloudflared，不替换系统程序 |
 | /opt/residential-certbot | 独立证书虚拟环境 |
-| /root/three-nodes-info.txt、three-nodes-links.txt | 中文结果与已生成链接复制区（可能尚未通过公网测试）；600 |
+| /root/three-nodes-info.txt、three-nodes-links.txt | 中文分区结果与两组最多六行的已生成链接复制区（可能尚未通过公网测试）；600 |
 | /root/ip-install.XXXXXX.log | 每次安装的系统/下载/更新/本机检测及详细结果；root 私有，卸载后保留 |
 
 native-links 与最终 links 分离，避免重复安装时把旧的隧道入口当作原生入口。诊断资料分享前须脱敏。

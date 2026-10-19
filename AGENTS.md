@@ -30,6 +30,8 @@
 
 ## 当前状态
 
+最新用户要求为同时输出两组，不再增加直连/CF 选择：有私人或自有 CF 授权时，A 组原生直连三条、B 组 CF 三条，独立检查并保留，不能互相覆盖。详见 docs/NODE-GROUPS.md。平台 UDP 能力和本机 HY2 配置分别记录；UDP 映射未知时可以生成真实候选配置，但不可标成公网可用。CF 第二条为 TCP 替代，别名须明确非 UDP。node-groups.json 及六行复制文件均属私人运行资料。
+
 2026-10-19 纠正回环误判：本机连接公网 IP 成功不能证明云平台入站放行。probe_public_ports 仅写 self_reachable，public_reachable 保持未知；没有独立外测服务时，直连端口必须保留“后台核对/待外部确认”提示，退出码 2。禁止依据本机握手、TCP connect、旧证书或本机防火墙成功来隐藏提醒。详情见 NETWORK.md 与最新 TESTING.md；该规则修正前一轮过早隐藏端口的行为。
 
 2026-10-19 通用环境补全与证书修复：每次安装先执行 src/preflight.sh；旧系统 Python 自动为证书准备独立运行环境，源码 cert-runtime.py，生产复现与验收见 docs/ENVIRONMENT.md。Ubuntu 20.04/Python 3.8 已实际签发 IP 证书并通过外部 TLS 校验，系统 Python 和节点/账号文件未改变。不要把 HTTPS 失败直接解释成 80 未开放。

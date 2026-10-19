@@ -256,7 +256,12 @@ async function provision(request, env) {
     const data = await body(request);
     if (!env.CF_API_TOKEN || !env.CF_ACCOUNT_ID || !env.CF_ZONE_ID || !env.CF_ZONE_NAME) return json({error: '私人资源服务尚未配置'}, 503);
     const ports = data.ports;
-    if (!ports || ['panel','tcp','udp','home'].some(r => !Number.isInteger(ports[r]) || ports[r] < 1024 || ports[r] > 65535)) return json({error: '本机端口无效'}, 400);
+    const directOnly = data.resource_mode === 'direct';
+    if (data.resource_mode && !['direct','tunnel'].includes(data.resource_mode)) return json({error: '资源模式无效'}, 400);
+    if (!ports || (directOnly ? ['panel'] : ['panel','tcp','udp','home']).some(r => !Number.isInteger(ports[r]) || ports[r] < 1024 || ports[r] > 65535)) return json({error: '本机端口无效'}, 400);
+    const directAddress = typeof data.external_address === 'string' && /^[a-zA-Z0-9.-]+$/.test(data.external_address) && data.external_address.includes('.') &&
+        Number.isInteger(data.panel_external_port) && data.panel_external_port > 0 && data.panel_external_port <= 65535;
+    if (directOnly && !directAddress) return json({error: '直连面板缺少外部地址或端口映射'}, 400);
     let machine = await machineByToken(request, env), token = request.headers.get('Authorization')?.replace(/^Bearer /, '');
     if (!machine) {
         if (!/^[a-f0-9]{64}$/.test(token || '')) return json({error: '缺少有效的私人授权'}, 403);
@@ -273,6 +278,12 @@ async function provision(request, env) {
     }
     const resources = JSON.parse(machine.resources || '{}');
     try {
+        if (directOnly) {
+            const directHost = 'direct-' + machine.id.slice(2) + '.' + env.CF_ZONE_NAME;
+            await privateDns(env, machine, resources, directHost, /^\d+\.\d+\.\d+\.\d+$/.test(data.external_address) ? 'A' : 'CNAME', data.external_address, false);
+            resources.direct_host = directHost; await saveResources(env, machine, resources);
+            return json({ok: true, machine_id: machine.id, machine_token: token, direct_host: directHost});
+        }
         const base = '/accounts/' + env.CF_ACCOUNT_ID + '/cfd_tunnel';
         if (!resources.tunnel_id) {
             const tunnel = await cf(env, 'POST', base, {name: 'ip-private-' + machine.id, config_src: 'cloudflare'});
