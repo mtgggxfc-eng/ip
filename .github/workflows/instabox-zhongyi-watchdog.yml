@@ -1,0 +1,25 @@
+name: InstaBox zhongyi Watchdog
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: instabox-zhongyi-watchdog
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      INSTABOX_API_KEY: ${{ secrets.INSTABOX_API_KEY }}
+      INSTABOX_MACHINE_ID: m_agqyeponmofni7xqt6yr574yja
+    steps:
+      - uses: actions/checkout@v4
+      - name: Keep activity lease and recover machine if possible
+        run: python3 instabox_watchdog/watchdog.py
