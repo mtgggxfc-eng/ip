@@ -22,8 +22,8 @@ SUPPORTED = {
 MAX_BYTES = 32768
 
 
-def load_subscription(path: Path) -> bytes:
-    """Fail closed until all three distinctly labeled roles are verified."""
+def load_subscription(path: Path, allow_partial: bool = False) -> bytes:
+    """Publish verified roles only; optionally allow an incomplete verified set."""
     if not path.is_file() or path.stat().st_size > MAX_BYTES:
         raise ValueError("Missing or oversized private node manifest")
     manifest = json.loads(path.read_text(encoding="utf-8"))
@@ -33,6 +33,8 @@ def load_subscription(path: Path) -> bytes:
     for role in ROLES:
         row = manifest.get(role)
         if not isinstance(row, dict) or row.get("verified") is not True:
+            if allow_partial:
+                continue
             raise ValueError("Role %s is not verified" % role)
         link = row.get("uri")
         if (
@@ -44,6 +46,8 @@ def load_subscription(path: Path) -> bytes:
         ):
             raise ValueError("Role %s has an invalid URI" % role)
         links.append(link)
+    if not links:
+        raise ValueError("No verified nodes")
     if len(set(links)) != len(links):
         raise ValueError("Duplicated node links")
     return base64.b64encode(("\n".join(links) + "\n").encode("utf-8"))
@@ -54,6 +58,7 @@ def serve() -> None:
     source = os.environ.get("IP_PRIVATE_NODES_FILE", "")
     host = os.environ.get("IP_SUBSCRIPTION_BIND", "127.0.0.1")
     port = int(os.environ.get("IP_SUBSCRIPTION_PORT", "18090"))
+    allow_partial = os.environ.get("IP_SUBSCRIPTION_ALLOW_PARTIAL") == "1"
     if len(token) < 32 or not source:
         raise SystemExit("Required private token and manifest path are missing")
 
@@ -68,12 +73,12 @@ def serve() -> None:
                 self.send_error(404)
                 return
             try:
-                data = load_subscription(Path(source))
+                data = load_subscription(Path(source), allow_partial=allow_partial)
             except (ValueError, OSError, json.JSONDecodeError):
                 self.send_response(503)
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
-                self.wfile.write(b"Subscription not ready: three verified nodes required")
+                self.wfile.write(b"Subscription not ready: verified nodes required")
                 return
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
