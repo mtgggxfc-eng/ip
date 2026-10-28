@@ -1,0 +1,40 @@
+name: InstaBox gggxfc666 Smart Watchdog
+
+on:
+  schedule:
+    - cron: "17,37,57 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: instabox-gggxfc666-watchdog
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      INSTABOX_API_KEY: ${{ secrets.INSTABOX_API_KEY_B }}
+      INSTABOX_MACHINE_ID: m_agqyhakefa6iwzv5qxaurteuza
+      INSTABOX_RENEW_GUARD_SECONDS: "1500"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore last known InstaBox lease deadline
+        uses: actions/cache/restore@v4
+        with:
+          path: instabox_watchdog/.state
+          key: instabox-gggxfc666-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            instabox-gggxfc666-state-
+      - name: Check machine deadline and renew only if needed
+        id: watchdog
+        run: python3 instabox_watchdog/watchdog.py
+      - name: Preserve renewed lease deadline
+        if: steps.watchdog.outputs.renewed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: instabox_watchdog/.state
+          key: instabox-gggxfc666-state-${{ github.run_id }}-${{ github.run_attempt }}
