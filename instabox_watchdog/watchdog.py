@@ -8,6 +8,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 
 API = "https://api.instabox.sh"
 MACHINE = os.environ.get("INSTABOX_MACHINE_ID", "").strip()
@@ -43,6 +44,10 @@ def request(method, path, payload=None):
     if not KEY or not MACHINE:
         raise RuntimeError("Missing INSTABOX_API_KEY or INSTABOX_MACHINE_ID")
     headers = {"X-API-Key": KEY, "Accept": "application/json"}
+    # InstaBox lifecycle endpoints require an idempotency key. Keep the same
+    # value across retries for one logical operation.
+    if method.upper() in ("POST", "PUT", "PATCH", "DELETE") and (path.endswith("/start") or path.endswith("/resume") or path.endswith("/suspend") or path.endswith("/stop")):
+        headers["Idempotency-Key"] = str(uuid.uuid4())
     raw = None
     if payload is not None:
         headers["Content-Type"] = "application/json"
