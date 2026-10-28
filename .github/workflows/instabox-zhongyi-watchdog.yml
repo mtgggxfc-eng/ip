@@ -1,8 +1,8 @@
-name: InstaBox zhongyi Watchdog
+name: InstaBox zhongyi Smart Watchdog
 
 on:
   schedule:
-    - cron: "7,22,37,52 * * * *"
+    - cron: "11,31,51 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -19,7 +19,22 @@ jobs:
     env:
       INSTABOX_API_KEY: ${{ secrets.INSTABOX_API_KEY }}
       INSTABOX_MACHINE_ID: m_agqyeponmofni7xqt6yr574yja
+      INSTABOX_RENEW_GUARD_SECONDS: "1500"
     steps:
       - uses: actions/checkout@v4
-      - name: Keep activity lease and recover machine if possible
+      - name: Restore last known InstaBox lease deadline
+        uses: actions/cache/restore@v4
+        with:
+          path: instabox_watchdog/.state
+          key: instabox-zhongyi-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            instabox-zhongyi-state-
+      - name: Check machine deadline and renew only if needed
+        id: watchdog
         run: python3 instabox_watchdog/watchdog.py
+      - name: Preserve renewed lease deadline
+        if: steps.watchdog.outputs.renewed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: instabox_watchdog/.state
+          key: instabox-zhongyi-state-${{ github.run_id }}-${{ github.run_attempt }}
